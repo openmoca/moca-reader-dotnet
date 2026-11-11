@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Microsoft.Extensions.VectorData binding (docs/adr/0004): a store backend over any VectorData collection. -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.VectorData</RootNamespace>
+    <PackageId>OpenMoca.Reader.VectorData</PackageId>
+    <Description>Search MOCA packages through any Microsoft.Extensions.VectorData vector store, with the Reader's ranking and retrieval policy.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <PackageReference Include="Microsoft.Extensions.VectorData.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

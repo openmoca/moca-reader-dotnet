@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Microsoft Agent Framework binding (docs/adr/0004): a context provider and tools over a MocaSearch. -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.AgentFramework</RootNamespace>
+    <PackageId>OpenMoca.Reader.AgentFramework</PackageId>
+    <Description>Ground Microsoft Agent Framework agents in MOCA packages: a context provider and search, node and structure tools.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,4 @@
+{
+  "comment": "Conformance cases this Reader does not pass yet, each with a reason. Remove an entry as soon as it passes.",
+  "cases": {}
+}

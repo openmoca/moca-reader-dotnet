@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for the framework bindings (docs/adr/0004), over moca-spec's examples. No Docker, no model. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.Extensions.AI\OpenMoca.Reader.Extensions.AI.csproj" />
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.AgentFramework\OpenMoca.Reader.AgentFramework.csproj" />
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.VectorData\OpenMoca.Reader.VectorData.csproj" />
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.Onnx\OpenMoca.Reader.Onnx.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <PackageReference Include="CommunityToolkit.VectorData.InMemory" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\OpenMoca.Reader.Tests\MocaSpec.cs" Link="MocaSpec.cs" />
+  </ItemGroup>
+</Project>

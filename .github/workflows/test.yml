@@ -1,0 +1,174 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The other MOCA repositories, at fixed refs: release tags, or commits while a Spec Change
+# Proposal is in flight; never a branch (moca-spec CONTRIBUTING.md).
+env:
+  MOCA_SPEC_REF: v0.6.0
+  MOCA_READER_TYPESCRIPT_REF: v0.6.0
+  MOCA_TOOLS_REF: v0.6.0
+
+jobs:
+  deps:
+    name: Public dependencies only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: moca-reader-dotnet
+      # The check lives in moca-spec, the one copy every open repository runs.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-spec
+          ref: ${{ env.MOCA_SPEC_REF }}
+          path: moca-spec
+          # Read access to the other MOCA repos while they are private.
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node moca-spec/scripts/check-deps.mjs moca-reader-dotnet
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: moca-reader-dotnet
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-spec
+          ref: ${{ env.MOCA_SPEC_REF }}
+          path: moca-spec
+          # Read access to the other MOCA repos while they are private.
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: moca-reader-dotnet/global.json
+      - run: dotnet build moca-reader-dotnet.slnx -c Release
+        working-directory: moca-reader-dotnet
+      - run: dotnet test --project tests/OpenMoca.Reader.Tests -c Release --no-build
+        working-directory: moca-reader-dotnet
+      - run: dotnet test --project tests/OpenMoca.Reader.Bindings.Tests -c Release --no-build
+        working-directory: moca-reader-dotnet
+
+  runner-protocol:
+    name: Corpus and parity with the reference Reader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: moca-reader-dotnet
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-spec
+          ref: ${{ env.MOCA_SPEC_REF }}
+          path: moca-spec
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-reader-typescript
+          ref: ${{ env.MOCA_READER_TYPESCRIPT_REF }}
+          path: moca-reader-typescript
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-tools
+          ref: ${{ env.MOCA_TOOLS_REF }}
+          path: moca-tools
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: moca-reader-dotnet/global.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: moca-reader-typescript
+      - run: npm ci
+        working-directory: moca-tools
+      - run: npm ci
+        working-directory: moca-spec
+      - run: dotnet build tests/OpenMoca.Reader.ConformanceAdapter -c Release
+        working-directory: moca-reader-dotnet
+      - run: node scripts/run-conformance.mjs --reader "dotnet run --no-build --project ../moca-reader-dotnet/tests/OpenMoca.Reader.ConformanceAdapter -c Release"
+        working-directory: moca-spec
+      # The corpus never compares ranking; this checks we return what the reference Reader returns, in its order.
+      - run: node tests/OpenMoca.Reader.Parity/parity.mjs
+        working-directory: moca-reader-dotnet
+
+  # Phase 1's gate: the getting-started guide works as written (docs/getting-started.md).
+  guide:
+    name: Getting-started guide
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: moca-reader-dotnet
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-spec
+          ref: ${{ env.MOCA_SPEC_REF }}
+          path: moca-spec
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      # moca-spec's corpus runner links the reference Reader and moca-tools until they are on npm.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-reader-typescript
+          ref: ${{ env.MOCA_READER_TYPESCRIPT_REF }}
+          path: moca-reader-typescript
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/moca-tools
+          ref: ${{ env.MOCA_TOOLS_REF }}
+          path: moca-tools
+          token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: moca-reader-dotnet/global.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: moca-reader-typescript
+      - run: npm ci
+        working-directory: moca-tools
+      - name: Example package from the moca-spec release
+        env:
+          GH_TOKEN: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
+        run: gh release download v0.6.0 -R ${{ github.repository_owner }}/moca-spec -p support-kb.moca -p example-trust-root.json -D "$RUNNER_TEMP/assets"
+      - run: dotnet pack src/OpenMoca.Reader -c Release -o "$RUNNER_TEMP/feed"
+        working-directory: moca-reader-dotnet
+      # Until OpenMoca.Reader is on NuGet and the repositories are public: restore the Reader packed from
+      # this commit through a local feed, read the example from the private release, and use the
+      # checkouts. Drop each replacement when what it stands in for is public. The adapter is built at the
+      # checkout's real path, where the Reader was just packed: through the symlink MSBuild took the Reader as built
+      # under a path where its output is not (CS0006), and the corpus runner reaches it by the real path anyway.
+      - run: >-
+          node ../moca-spec/scripts/run-guide.mjs docs/getting-started.md
+          --replace "dotnet new console -o moca-start=>dotnet new console -o moca-start && dotnet new nugetconfig -o moca-start && dotnet nuget add source $RUNNER_TEMP/feed -n local --configfile moca-start/nuget.config"
+          --replace "https://github.com/openmoca/moca-spec/releases/download/v0.6.0/=>file://$RUNNER_TEMP/assets/"
+          --replace "git clone --depth 1 --branch v0.6.0 https://github.com/openmoca/moca-spec.git=>ln -s $GITHUB_WORKSPACE/moca-spec moca-spec"
+          --replace "git clone --depth 1 --branch v0.6.0 https://github.com/openmoca/moca-reader-dotnet.git=>ln -s $GITHUB_WORKSPACE/moca-reader-dotnet moca-reader-dotnet"
+          --replace "dotnet build moca-reader-dotnet/tests/OpenMoca.Reader.ConformanceAdapter -c Release=>dotnet build $GITHUB_WORKSPACE/moca-reader-dotnet/tests/OpenMoca.Reader.ConformanceAdapter -c Release"
+        working-directory: moca-reader-dotnet

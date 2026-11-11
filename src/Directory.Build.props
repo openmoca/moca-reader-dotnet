@@ -1,0 +1,16 @@
+<!--
+  NuGet metadata shared by every package in src/. Each project sets its own PackageId and Description.
+-->
+<Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <Version>0.6.0</Version>
+    <Authors>MOCA Standard Contributors</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/openmoca/moca-reader-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/openmoca/moca-reader-dotnet</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

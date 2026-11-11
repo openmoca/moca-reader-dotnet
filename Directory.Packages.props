@@ -1,0 +1,39 @@
+<!--
+  Central package management: every NuGet version lives here, once.
+  Projects reference packages without a Version attribute.
+-->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- No transitive pinning: it lists every pinned package as a direct dependency of every package we
+         publish. AngleSharp, the one transitive pin we need, is a direct reference of OpenMoca.Reader instead. -->
+  </PropertyGroup>
+
+  <!-- The Reader. No ASP.NET or hosting packages: the Reader must stay portable. -->
+  <ItemGroup>
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+    <PackageVersion Include="JsonSchema.Net" Version="9.5.0" />
+    <PackageVersion Include="dotNetRdf.Core" Version="3.5.2" />
+    <!-- dotNetRdf.Core depends on AngleSharp for HTML parsing we don't use.
+         Pinned above its transitive floor to clear GHSA-pgww-w46g-26qg. -->
+    <PackageVersion Include="AngleSharp" Version="1.8.6" />
+    <!-- Ed25519 for DSSE attestations: .NET has no built-in Ed25519. -->
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
+  </ItemGroup>
+
+  <!-- Framework bindings (docs/adr/0004). Each binding package takes one framework's abstractions, never the Reader. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="1.26.0" />
+    <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.11.0" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.1" />
+  </ItemGroup>
+
+  <!-- Tests -->
+  <ItemGroup>
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.26.0" />
+    <PackageVersion Include="CommunityToolkit.VectorData.InMemory" Version="1.0.1" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The .NET side of the parity check with the reference Reader: parity.mjs builds the sidecars, runs the
+    reference Reader, runs this, and compares. Not a conformance requirement: the corpus never compares ranking.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+  </ItemGroup>
+</Project>

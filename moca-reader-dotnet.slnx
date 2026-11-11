@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenMoca.Reader.AgentFramework/OpenMoca.Reader.AgentFramework.csproj" />
+    <Project Path="src/OpenMoca.Reader.Extensions.AI/OpenMoca.Reader.Extensions.AI.csproj" />
+    <Project Path="src/OpenMoca.Reader.Onnx/OpenMoca.Reader.Onnx.csproj" />
+    <Project Path="src/OpenMoca.Reader.Sigstore/OpenMoca.Reader.Sigstore.csproj" />
+    <Project Path="src/OpenMoca.Reader.VectorData/OpenMoca.Reader.VectorData.csproj" />
+    <Project Path="src/OpenMoca.Reader/OpenMoca.Reader.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenMoca.Reader.Bindings.Tests/OpenMoca.Reader.Bindings.Tests.csproj" />
+    <Project Path="tests/OpenMoca.Reader.ConformanceAdapter/OpenMoca.Reader.ConformanceAdapter.csproj" />
+    <Project Path="tests/OpenMoca.Reader.Parity/OpenMoca.Reader.Parity.csproj" />
+    <Project Path="tests/OpenMoca.Reader.Tests/OpenMoca.Reader.Tests.csproj" />
+  </Folder>
+</Solution>

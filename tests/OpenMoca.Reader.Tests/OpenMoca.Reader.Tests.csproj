@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Reader unit tests plus the moca-spec conformance corpus, run as theories. No Docker. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <ProjectReference Include="..\OpenMoca.Reader.ConformanceAdapter\OpenMoca.Reader.ConformanceAdapter.csproj" />
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.Sigstore\OpenMoca.Reader.Sigstore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Conformance\expected-failures.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The same vectors as moca-reader-typescript's test/fixtures/token-vectors.json. -->
+    <None Include="Fixtures\token-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

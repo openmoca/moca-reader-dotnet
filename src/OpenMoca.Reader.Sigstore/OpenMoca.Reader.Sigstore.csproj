@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline Sigstore verification for OpenMoca.Reader (attestations §6): no dependency beyond .NET itself. -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.Sigstore</RootNamespace>
+    <PackageId>OpenMoca.Reader.Sigstore</PackageId>
+    <Description>Verify Sigstore-signed MOCA attestations offline, against a trusted root the host supplies.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

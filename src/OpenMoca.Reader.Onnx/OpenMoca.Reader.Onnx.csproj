@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ONNX binding (docs/adr/0004): MOCA's standard embedding models (sidecar index specification §5.1), run locally
+    with ONNX Runtime, as Reader embedders. An application embeds queries with the same model, and the same convention,
+    as the index was built with (moca-index build with a model). Files come from a model store; nothing is downloaded
+    except by ModelStore.AddAsync, when the host asks for it.
+  -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.Onnx</RootNamespace>
+    <PackageId>OpenMoca.Reader.Onnx</PackageId>
+    <Description>MOCA's standard embedding models (bge-small-en-v1.5, nomic-embed-text-v1.5, all-MiniLM-L6-v2, multilingual-e5-small) run locally with ONNX Runtime, as MOCA Reader embedders for semantic and hybrid search.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenMoca.Reader.Bindings.Tests" />
+  </ItemGroup>
+</Project>

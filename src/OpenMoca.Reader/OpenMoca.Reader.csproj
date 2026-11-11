@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The .NET MOCA Reader (docs/adr/0001). It has no ASP.NET, hosting or app references, so any host can
+    load it in-process. Keep it that way: hosts depend on the Reader, never the reverse.
+  -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader</RootNamespace>
+    <PackageId>OpenMoca.Reader</PackageId>
+    <Description>Reads, verifies and searches MOCA packages (moca-spec 0.4).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Not used directly: dotNetRdf.Core brings it in. Referenced so the safe floor pinned in
+         Directory.Packages.props reaches every host that uses this Reader (GHSA-pgww-w46g-26qg).
+         Goes when dotNetRdf 4.0, which drops AngleSharp, ships (docs/adr/0003). -->
+    <PackageReference Include="AngleSharp" />
+    <PackageReference Include="BouncyCastle.Cryptography" />
+    <PackageReference Include="dotNetRdf.Core" />
+    <PackageReference Include="JsonSchema.Net" />
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <!-- Copies of moca-spec's schemas/v1. OpenMoca.Reader.Tests checks they stay byte-identical to the spec's. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Schemas\*.schema.json" LogicalName="OpenMoca.Reader.Schemas.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenMoca.Reader.Tests" />
+  </ItemGroup>
+</Project>

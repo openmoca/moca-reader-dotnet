@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Microsoft.Extensions.AI binding (docs/adr/0004): any IEmbeddingGenerator as a Reader embedder. -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.Extensions.AI</RootNamespace>
+    <PackageId>OpenMoca.Reader.Extensions.AI</PackageId>
+    <Description>Use any Microsoft.Extensions.AI embedding generator as a MOCA Reader embedder.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
