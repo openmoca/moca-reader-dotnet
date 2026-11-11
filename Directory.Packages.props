@@ -24,7 +24,7 @@
   <!-- Framework bindings (docs/adr/0004). Each binding package takes one framework's abstractions, never the Reader. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="1.26.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="1.28.0" />
     <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.11.0" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.1" />
