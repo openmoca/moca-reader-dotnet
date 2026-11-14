@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Decrypt-only age v1 for MOCA encrypted packages (moca-spec encrypted packages §4), on BouncyCastle.
+    OpenMoca.Reader never references this package: a host adds it to enable the optional feature `encryption`.
+  -->
+  <PropertyGroup>
+    <RootNamespace>OpenMoca.Reader.Age</RootNamespace>
+    <PackageId>OpenMoca.Reader.Age</PackageId>
+    <Description>Open encrypted MOCA packages: decrypt-only age v1 (X25519 and scrypt recipients, no plugins).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenMoca.Reader\OpenMoca.Reader.csproj" />
+    <PackageReference Include="BouncyCastle.Cryptography" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenMoca.Reader.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

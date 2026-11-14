@@ -7,6 +7,18 @@ All notable changes to OpenMoca.Reader and its bindings. The format follows [Kee
 
 For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5)).
 
+### Added (encrypted packages §4)
+
+- `OpenMoca.Reader.Age`, a new package: decrypt-only age v1 on
+  BouncyCastle (already a dependency), not the platform-dependent BCL
+  `ChaCha20Poly1305`. X25519 and scrypt recipients, no plugins, no armor.
+  Strict header parsing (64 KiB cap, canonical base64, scrypt alone,
+  work-factor limit checked before scrypt runs, low-order shares refused),
+  constant-time MAC compare, and no plaintext before the whole payload
+  authenticates. `OpenMoca.Reader` never references it. Tested against
+  every applicable C2SP age test vector and against the Go age CLI on
+  moca-spec's envelope fixtures.
+
 ### Added (package spec §4.1)
 
 - `PackageResult.Distribution`: the manifest's `distribution`, or `open`
