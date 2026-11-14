@@ -1,3 +1,4 @@
+using OpenMoca.Reader.Encryption;
 using OpenMoca.Reader.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -33,6 +34,9 @@ public static class ConformanceCases
             RequireSignature = o["requireSignature"]?.GetValue<bool>() == true,
             Strict = o["strict"]?.GetValue<bool>() == true,
             SigstoreVerifier = new OpenMoca.Reader.Sigstore.SigstoreVerifier(),
+            // This Reader implements the optional feature `encryption` through OpenMoca.Reader.Age.
+            EnvelopeDecryptor = OpenMoca.Reader.Age.AgeEnvelopeDecryptor.Instance,
+            KeyProvider = KeyProvider(root, o),
         };
 
         // The host clock applies to reading too: keys expire (attestations §6).
@@ -83,6 +87,7 @@ public static class ConformanceCases
             ["capabilities"] = StructureJson.Strings(result.Capabilities),
             ["digest"] = result.Digest,
             ["distribution"] = result.Distribution,
+            ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
         };
         if (sidecarUsable is not null)
@@ -307,6 +312,49 @@ public static class ConformanceCases
         }
     }
 
+/// <summary>
+    /// The conformance key provider (encrypted packages §5.1): the identities in the case's identity files, its
+    /// passphrase, or its file key (hex). No key options means no key provider.
+    /// </summary>
+    private static Func<EnvelopeKeyRequest, CancellationToken, ValueTask<EnvelopeKey?>>? KeyProvider(string root, JsonObject o)
+    {
+        if (o["identities"] is JsonArray files)
+        {
+            var identities = files.SelectMany(f => File.ReadAllLines(Path.Combine(root, Str(f)!)))
+                .Select(l => l.Trim()).Where(l => l.StartsWith("AGE-SECRET-KEY-1", StringComparison.Ordinal)).ToList();
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(Identities: identities));
+        }
+
+        if (Str(o["passphrase"]) is { } passphrase)
+        {
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(Passphrase: passphrase));
+        }
+
+        if (Str(o["fileKey"]) is { } fileKey)
+        {
+            var bytes = Convert.FromHexString(fileKey);
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(FileKey: bytes));
+        }
+
+        return null;
+    }
+
+    private static JsonObject EnvelopeJson(EnvelopeInfo envelope)
+    {
+        var json = new JsonObject { ["opened"] = envelope.Opened };
+        if (envelope.Format is not null)
+        {
+            json["format"] = envelope.Format;
+        }
+
+        if (envelope.Outline is not null)
+        {
+            json["outline"] = envelope.Outline.DeepClone();
+        }
+
+        return json;
+    }
+
     private static ReaderLimits Limits(JsonObject? limits)
     {
         if (limits is null)
@@ -327,6 +375,7 @@ public static class ConformanceCases
             MaxEvidenceChecksPerPackage = Int("maxEvidenceChecksPerPackage") ?? d.MaxEvidenceChecksPerPackage,
             MaxEvidenceBytesPerPackage = JsonValues.IntegerOf(limits["maxEvidenceBytesPerPackage"]) ?? d.MaxEvidenceBytesPerPackage,
             MaxSourceBytesChecked = Int("maxSourceBytesChecked") ?? d.MaxSourceBytesChecked,
+            MaxScryptWorkFactor = Int("maxScryptWorkFactor") ?? d.MaxScryptWorkFactor,
         };
     }
 

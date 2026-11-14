@@ -22,6 +22,9 @@ public sealed class DiagnosticBag(bool strict = false)
         return diagnostic;
     }
 
+    /// <summary>Records a diagnostic another bag already made, as it is (its severity was already decided).</summary>
+    internal void AddExisting(Diagnostic diagnostic) => _items.Add(diagnostic);
+
     /// <summary>True when any diagnostic with this code has been reported.</summary>
     public bool Has(string code) => _items.Exists(d => d.Code == code);
 

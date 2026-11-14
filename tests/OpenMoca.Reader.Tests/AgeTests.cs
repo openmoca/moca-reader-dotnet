@@ -214,7 +214,7 @@ public sealed class AgeTests
         Assert.True(compared >= 15);
     }
 
-    private static (int Code, byte[] Stdout) Run(string file, string[] args, byte[] input, Dictionary<string, string>? env)
+    internal static (int Code, byte[] Stdout) Run(string file, string[] args, byte[] input, Dictionary<string, string>? env)
     {
         var info = new ProcessStartInfo(file) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in args)

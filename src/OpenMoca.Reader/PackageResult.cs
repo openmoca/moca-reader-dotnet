@@ -63,7 +63,7 @@ public sealed class PackageResult
     /// <summary>Every diagnostic, in the order found.</summary>
     public IReadOnlyList<Diagnostic> Diagnostics { get; internal set; } = [];
 
-    /// <summary>No error in the T, P, M or C families (Reader contract §11).</summary>
+    /// <summary>No error in the T, P, M, C or E families (Reader contract §11).</summary>
     public bool Valid { get; internal set; }
 
     /// <summary>Derived capabilities, sorted (package spec §11). Empty when the package is invalid.</summary>
@@ -75,6 +75,12 @@ public sealed class PackageResult
     /// A label only: it never changes what the Reader does.
     /// </summary>
     public string? Distribution { get; internal set; }
+
+    /// <summary>
+    /// For an envelope only (encrypted packages §5.3): its format, whether it was opened, and its unverified outline
+    /// when it was not. Null for a package that is not an envelope.
+    /// </summary>
+    public Encryption.EnvelopeInfo? Envelope { get; internal set; }
 
     /// <summary>The source the package was read from.</summary>
     public IPackageSource? Source { get; internal set; }

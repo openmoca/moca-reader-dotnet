@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text;
 using OpenMoca.Reader.Diagnostics;
 
 namespace OpenMoca.Reader.Sources;
@@ -20,6 +21,13 @@ public static class PackageSources
 
         if (File.Exists(path) && (path.EndsWith(".moca", StringComparison.OrdinalIgnoreCase)
                                   || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new ArchiveSource(File.ReadAllBytes(path), path, limits ?? ReaderLimits.Default);
+        }
+
+        // Encrypted packages §2: an envelope (conventionally .moca.enc) is recognised by content, so any file that starts
+        // with a Zip signature is read as an archive.
+        if (File.Exists(path) && StartsWithZipSignature(path))
         {
             return new ArchiveSource(File.ReadAllBytes(path), path, limits ?? ReaderLimits.Default);
         }
@@ -78,8 +86,28 @@ public static class PackageSources
     /// Contract §3: entry names are UTF-8. Reads the central directory's raw names and flags: a name with bytes outside
     /// ASCII and without the UTF-8 flag (general purpose bit 11), or with a NUL, rejects the archive.
     /// </summary>
-    internal static void AssertNamesAreUtf8(byte[] archive)
+    private static bool StartsWithZipSignature(string path)
     {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> head = stackalloc byte[4];
+            return stream.ReadAtLeast(head, 4, throwOnEndOfStream: false) == 4
+                && head[0] == 0x50 && head[1] == 0x4b && ((head[2] == 3 && head[3] == 4) || (head[2] == 5 && head[3] == 6));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Checks every central-directory name is UTF-8 (contract §3) and returns each entry's compression method, which
+    /// <see cref="System.IO.Compression.ZipArchiveEntry"/> does not expose (encrypted packages §2 needs it).
+    /// </summary>
+    internal static Dictionary<string, int> AssertNamesAreUtf8(byte[] archive)
+    {
+        var methods = new Dictionary<string, int>(StringComparer.Ordinal);
         // End of central directory: signature 0x06054b50, searched backwards over the comment.
         var eocd = -1;
         for (var i = archive.Length - 22; i >= Math.Max(0, archive.Length - 22 - 0xFFFF); i--)
@@ -93,7 +121,7 @@ public static class PackageSources
 
         if (eocd < 0)
         {
-            return; // ZipArchive reports a damaged archive.
+            return methods; // ZipArchive reports a damaged archive.
         }
 
         var count = BitConverter.ToUInt16(archive, eocd + 10);
@@ -103,7 +131,7 @@ public static class PackageSources
             var at = (int)offset;
             if (BitConverter.ToUInt32(archive, at) != 0x02014b50)
             {
-                return;
+                return methods;
             }
 
             var flags = BitConverter.ToUInt16(archive, at + 8);
@@ -112,7 +140,7 @@ public static class PackageSources
             var commentLength = BitConverter.ToUInt16(archive, at + 32);
             if (at + 46 + nameLength > archive.Length)
             {
-                return;
+                return methods;
             }
 
             var name = archive.AsSpan(at + 46, nameLength);
@@ -126,8 +154,11 @@ public static class PackageSources
                 throw new TargetException(DiagnosticCodes.T003ArchiveRejected, "archive entry name is not marked as UTF-8");
             }
 
+            methods[Encoding.UTF8.GetString(name)] = BitConverter.ToUInt16(archive, at + 10);
             offset += 46 + nameLength + extraLength + commentLength;
         }
+
+        return methods;
     }
 
     internal static int CompareOrdinal(PackageEntry a, PackageEntry b) => string.CompareOrdinal(a.Path, b.Path);
@@ -258,7 +289,7 @@ internal sealed class ArchiveSource : IPackageSource
     public ArchiveSource(byte[] archive, string? location, ReaderLimits limits)
     {
         Location = location;
-        PackageSources.AssertNamesAreUtf8(archive);
+        Methods = PackageSources.AssertNamesAreUtf8(archive);
         ZipArchive zip;
         try
         {
@@ -297,6 +328,7 @@ internal sealed class ArchiveSource : IPackageSource
                 var path = name.TrimEnd('/');
                 if (PackageSources.HasHiddenSegment(path))
                 {
+                    HiddenEntries.Add(path);
                     continue;
                 }
 
@@ -344,6 +376,12 @@ internal sealed class ArchiveSource : IPackageSource
     public string Kind => "archive";
 
     public string? Location { get; }
+
+    /// <summary>Each entry's Zip compression method (0 stored, 8 deflated), by stored name.</summary>
+    internal IReadOnlyDictionary<string, int> Methods { get; }
+
+    /// <summary>Hidden entries, which are not part of a package but make an envelope invalid (encrypted packages §2).</summary>
+    internal List<string> HiddenEntries { get; } = [];
 
     public IReadOnlyList<PackageEntry> List() => _entries;
 

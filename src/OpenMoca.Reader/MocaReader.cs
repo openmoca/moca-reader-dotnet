@@ -43,7 +43,9 @@ public static partial class MocaReader
         return ReadInternalAsync(target, options ?? new ReadOptions(), [], new MemberBudget(), cancellationToken);
     }
 
-    private static async Task<PackageResult> ReadInternalAsync(PackageTarget target, ReadOptions options, IReadOnlyList<string> stack, MemberBudget budget, CancellationToken cancellationToken)
+    private static async Task<PackageResult> ReadInternalAsync(
+        PackageTarget target, ReadOptions options, IReadOnlyList<string> stack, MemberBudget budget, CancellationToken cancellationToken,
+        EnvelopeCheck? envelopeCheck = null)
     {
         var diagnostics = new DiagnosticBag(options.Strict);
         var result = new PackageResult();
@@ -62,6 +64,14 @@ public static partial class MocaReader
 
         result.Source = source;
         var (entriesOk, files) = PackageDigest.PackageFiles(source, diagnostics);
+        // Encrypted packages §2: an archive with moca-enc.json at its root is an envelope (never the inner archive).
+        if (envelopeCheck is null && IsEnvelope(source, files))
+        {
+            return await ReadEnvelopeAsync((ArchiveSource)source, files, entriesOk, diagnostics, result, options,
+                (plain, check) => ReadInternalAsync(PackageTarget.FromArchive(plain), options, stack, budget, cancellationToken, check),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         if (!files.ContainsKey(PackageDigest.ManifestFile))
         {
             diagnostics.Add(DiagnosticCodes.T002ManifestNotFound, "the target has no moca.json at its root");
@@ -118,6 +128,12 @@ public static partial class MocaReader
         }
 
         result.Manifest = manifest;
+        if (envelopeCheck is not null && OutlineMismatch(envelopeCheck, manifest, bytes) is { } why)
+        {
+            diagnostics.Add(DiagnosticCodes.E004OutlineMismatch, why, PackageDigest.ManifestFile);
+            return Finish(result, diagnostics);
+        }
+
         ManifestChecks.Check(manifest, diagnostics, options.KnownProfiles);
         // Package spec §4.1: the publisher's intent, exposed and never acted on. Null when the manifest fails its schema.
         if (!diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))

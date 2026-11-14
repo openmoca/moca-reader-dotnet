@@ -95,6 +95,70 @@ public static class SidecarBinder
         return Bind(source, package, diagnostics);
     }
 
+    /// <summary>
+    /// Binds an envelope's <c>index.age</c> to the result of reading that envelope (encrypted packages §6): opened through
+    /// the same key provider (<c>file: "index"</c>) and steps 3–6, then bound as any sidecar. A failure makes the
+    /// sidecar unusable and is reported here with its code; it never changes the package's validity.
+    /// </summary>
+    public static async Task<SidecarBinding> BindEnvelopeAsync(PackageTarget envelope, PackageResult package, ReadOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(options);
+        var diagnostics = new DiagnosticBag(options.Strict);
+        SidecarBinding Fail(string code, string message, string? file = null)
+        {
+            diagnostics.Add(code, message, file);
+            return new SidecarBinding(false, null, [], diagnostics.Items);
+        }
+
+        if (package.Envelope is not { Opened: true })
+        {
+            return Fail(DiagnosticCodes.S001SidecarInvalid, "index.age binds only to an opened envelope");
+        }
+
+        IPackageSource source;
+        try
+        {
+            source = envelope.Open(options.Limits);
+            source.List();
+        }
+        catch (TargetException ex)
+        {
+            return Fail(DiagnosticCodes.S001SidecarInvalid, ex.Message);
+        }
+
+        if (source is not ArchiveSource archive || !archive.List().Any(e => e.Path == "index.age"))
+        {
+            return Fail(DiagnosticCodes.S001SidecarInvalid, "the envelope has no index.age");
+        }
+
+        if (archive.Methods.TryGetValue("index.age", out var method) && method != 0)
+        {
+            return Fail(DiagnosticCodes.E005EnvelopeInvalid, "index.age must be stored, not compressed", "index.age");
+        }
+
+        var outline = package.Envelope.Outline;
+        var (plain, code, message) = await MocaReader.OpenAgeEntryAsync(archive.Read("index.age"), "index", outline, options, cancellationToken).ConfigureAwait(false);
+        if (plain is null)
+        {
+            return Fail(code!, message!, "index.age");
+        }
+
+        IPackageSource index;
+        try
+        {
+            index = PackageSources.OpenArchive(plain, options.Limits);
+            index.List();
+        }
+        catch (TargetException ex)
+        {
+            return Fail(DiagnosticCodes.S001SidecarInvalid, ex.Message, "index.age");
+        }
+
+        return Bind(index, package, diagnostics);
+    }
+
     private static SidecarBinding Bind(IPackageSource source, PackageResult package, DiagnosticBag diagnostics)
     {
         var listed = source.List().Where(e => e.Kind == PackageEntryKind.File).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);

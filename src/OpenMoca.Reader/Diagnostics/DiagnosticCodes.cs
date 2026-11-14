@@ -66,6 +66,24 @@ public static class DiagnosticCodes
     /// <summary>An evidence selector does not match the text source file it cites inside the package.</summary>
     public const string C011EvidenceSelectorUnmatched = "C011_EVIDENCE_SELECTOR_UNMATCHED";
 
+    /// <summary>An envelope was not opened: no key provider or decryptor, or no key it can use (encrypted packages §5.1).</summary>
+    public const string E001EncryptedNoKey = "E001_ENCRYPTED_NO_KEY";
+
+    /// <summary>A key was supplied for an envelope, but it is not a valid key, unwrapping failed, or the header MAC failed.</summary>
+    public const string E002DecryptionFailed = "E002_DECRYPTION_FAILED";
+
+    /// <summary>An envelope's encrypted payload failed authentication or was truncated.</summary>
+    public const string E003PayloadCorrupt = "E003_PAYLOAD_CORRUPT";
+
+    /// <summary>An envelope's outline differs from the decrypted manifest or structure.</summary>
+    public const string E004OutlineMismatch = "E004_OUTLINE_MISMATCH";
+
+    /// <summary>An envelope's entries or moca-enc.json are invalid.</summary>
+    public const string E005EnvelopeInvalid = "E005_ENVELOPE_INVALID";
+
+    /// <summary>An envelope's age header is malformed, unsupported or over a limit.</summary>
+    public const string E006AgeHeaderInvalid = "E006_AGE_HEADER_INVALID";
+
     // Attestations
     /// <summary>An attestation file is not a parseable envelope and statement.</summary>
     public const string A001AttestationMalformed = "A001_ATTESTATION_MALFORMED";
@@ -156,6 +174,12 @@ public static class DiagnosticCodes
         [C009LocaleOrphan] = DiagnosticSeverity.Warning,
         [C010ValidityWindowInvalid] = DiagnosticSeverity.Warning,
         [C011EvidenceSelectorUnmatched] = DiagnosticSeverity.Warning,
+        [E001EncryptedNoKey] = DiagnosticSeverity.Error,
+        [E002DecryptionFailed] = DiagnosticSeverity.Error,
+        [E003PayloadCorrupt] = DiagnosticSeverity.Error,
+        [E004OutlineMismatch] = DiagnosticSeverity.Error,
+        [E005EnvelopeInvalid] = DiagnosticSeverity.Error,
+        [E006AgeHeaderInvalid] = DiagnosticSeverity.Error,
         [A001AttestationMalformed] = DiagnosticSeverity.Error,
         [A002AttestationInvalid] = DiagnosticSeverity.Error,
         [A003AttestationUnverifiable] = DiagnosticSeverity.Warning,
@@ -198,5 +222,5 @@ public static class DiagnosticCodes
     /// (Reader contract §11). Errors in other families only disable the feature concerned.
     /// </summary>
     public static bool IsInvalidating(string code) =>
-        (code.Length > 0 && code[0] is 'T' or 'P' or 'M' or 'C') || code == A009SignatureRequired; // A009 only when the host requires a signature.
+        (code.Length > 0 && code[0] is 'T' or 'P' or 'M' or 'C' or 'E') || code == A009SignatureRequired; // A009 only when the host requires a signature; E: contract §11.
 }
