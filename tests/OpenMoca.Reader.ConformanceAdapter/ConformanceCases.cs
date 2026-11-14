@@ -95,6 +95,9 @@ public static class ConformanceCases
             ["capabilities"] = StructureJson.Strings(result.Capabilities),
             ["digest"] = result.Digest,
             ["distribution"] = result.Distribution,
+            ["images"] = result.Images is { } images ? new JsonArray([.. images.Select(ImageJson)]) : null,
+            ["translations"] = result.Translations is { } translations ? TranslationsJson(translations) : null,
+            ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
         };
@@ -347,6 +350,56 @@ public static class ConformanceCases
         return null;
     }
 
+    /// <summary>Package spec §4.6: an image as declared; absent members are left out.</summary>
+    private static JsonNode ImageJson(ManifestImage image)
+    {
+        var json = new JsonObject { ["src"] = image.Src, ["role"] = image.Role, ["type"] = image.Type };
+        if (image.Sizes is not null)
+        {
+            json["sizes"] = image.Sizes;
+        }
+
+        if (image.Alt is not null)
+        {
+            json["alt"] = image.Alt;
+        }
+
+        return json;
+    }
+
+    /// <summary>Package spec §4.7: translations as declared; absent members are left out.</summary>
+    private static JsonObject TranslationsJson(IReadOnlyDictionary<string, ManifestTranslation> translations)
+    {
+        var json = new JsonObject();
+        foreach (var (tag, t) in translations)
+        {
+            var one = new JsonObject();
+            if (t.Title is not null)
+            {
+                one["title"] = t.Title;
+            }
+
+            if (t.Description is not null)
+            {
+                one["description"] = t.Description;
+            }
+
+            if (t.Tags is not null)
+            {
+                one["tags"] = StructureJson.Strings(t.Tags);
+            }
+
+            if (t.Alt is not null)
+            {
+                one["alt"] = new JsonObject(t.Alt.Select(kv => KeyValuePair.Create<string, JsonNode?>(kv.Key, kv.Value)));
+            }
+
+            json[tag] = one;
+        }
+
+        return json;
+    }
+
     private static JsonObject EnvelopeJson(EnvelopeInfo envelope)
     {
         var json = new JsonObject { ["opened"] = envelope.Opened };
@@ -384,6 +437,7 @@ public static class ConformanceCases
             MaxEvidenceBytesPerPackage = JsonValues.IntegerOf(limits["maxEvidenceBytesPerPackage"]) ?? d.MaxEvidenceBytesPerPackage,
             MaxSourceBytesChecked = Int("maxSourceBytesChecked") ?? d.MaxSourceBytesChecked,
             MaxScryptWorkFactor = Int("maxScryptWorkFactor") ?? d.MaxScryptWorkFactor,
+            MaxImageBytes = Int("maxImageBytes") ?? d.MaxImageBytes,
         };
     }
 

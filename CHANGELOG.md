@@ -5,7 +5,24 @@ All notable changes to OpenMoca.Reader and its bindings. The format follows [Kee
 
 ## [Unreleased]
 
-For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5)).
+For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5) and
+[moca-spec#7](https://github.com/openmoca/moca-spec/issues/7)).
+
+### Added (package spec §4.6–4.8)
+
+- `PackageResult.Images` (`ManifestImage`), `Translations`
+  (`ManifestTranslation`) and `Tags`, set when the package is valid. Each
+  image is checked for presence, `ReaderLimits.MaxImageBytes` (default
+  1 MiB) and the PNG, JPEG or WebP signature of its type, never decoded
+  (`M010`). Translation keys must be declared locales (`M011`); repeated
+  tags are dropped (`M012`); translated alt text for an unknown image is
+  dropped (`M013`).
+- Envelopes: the opt-in cover copy (`outline/cover.png`, `.jpg` or
+  `.webp`), at most one and within `MaxImageBytes` (`E005`), checked
+  against the inner manifest's first cover (`E004`). `translations` and
+  `tags` may be outline properties.
+- The manifest and moca-enc schemas are copied from moca-spec; the
+  conformance adapter reports the three fields.
 
 ### Added (encrypted packages §2–§6)
 

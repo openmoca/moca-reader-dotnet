@@ -77,6 +77,24 @@ public sealed class PackageResult
     public string? Distribution { get; internal set; }
 
     /// <summary>
+    /// The manifest images that passed their checks, as declared (package spec §4.6). No bytes: a host reads an image
+    /// from the package as it reads any file. Null when the manifest has none or the package is invalid.
+    /// </summary>
+    public IReadOnlyList<ManifestImage>? Images { get; internal set; }
+
+    /// <summary>
+    /// The manifest's own text per declared locale, as declared, without dropped alt text or repeated tags (package
+    /// spec §4.7). Null when the manifest has none or the package is invalid.
+    /// </summary>
+    public IReadOnlyDictionary<string, ManifestTranslation>? Translations { get; internal set; }
+
+    /// <summary>The package tags without repeats (package spec §4.8). Null when the manifest has none or the package is invalid.</summary>
+    public IReadOnlyList<string>? Tags { get; internal set; }
+
+    /// <summary>Images, translations and tags, held until the package is known to be valid.</summary>
+    internal Catalogue? PendingCatalogue { get; set; }
+
+    /// <summary>
     /// For an envelope only (encrypted packages §5.3): its format, whether it was opened, and its unverified outline
     /// when it was not. Null for a package that is not an envelope.
     /// </summary>

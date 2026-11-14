@@ -9,7 +9,10 @@ using OpenMoca.Reader.Sources;
 namespace OpenMoca.Reader;
 
 /// <summary>What the inner archive of an envelope is checked against, right after its manifest is read (step 8).</summary>
-internal sealed record EnvelopeCheck(JsonObject? Outline, byte[]? Structure);
+internal sealed record EnvelopeCheck(JsonObject? Outline, byte[]? Structure, EnvelopeCover? Cover);
+
+/// <summary>An envelope's plain cover copy (encrypted packages §3): its entry name and bytes.</summary>
+internal sealed record EnvelopeCover(string Name, byte[] Bytes);
 
 /// <summary>Encrypted packages (moca-spec spec/moca-encrypted-package.md): recognising and opening envelopes.</summary>
 public static partial class MocaReader
@@ -20,6 +23,14 @@ public static partial class MocaReader
     private const string StructureCopy = "outline/structure.ttl";
     private const int Stored = 0;
     private static readonly HashSet<string> EnvelopeEntries = new(StringComparer.Ordinal) { Marker, PackageAge, StructureCopy, IndexAge };
+
+    /// <summary>Encrypted packages §3: the opt-in cover copy, by name, and the type its extension gives.</summary>
+    private static readonly Dictionary<string, string> CoverCopies = new(StringComparer.Ordinal)
+    {
+        ["outline/cover.png"] = "image/png",
+        ["outline/cover.jpg"] = "image/jpeg",
+        ["outline/cover.webp"] = "image/webp",
+    };
 
     /// <summary>An archive with moca-enc.json at its root is an envelope (encrypted packages §2).</summary>
     private static bool IsEnvelope(IPackageSource source, IReadOnlyDictionary<string, string> files) =>
@@ -55,7 +66,7 @@ public static partial class MocaReader
 
         foreach (var path in files.Keys)
         {
-            if (!EnvelopeEntries.Contains(path))
+            if (!EnvelopeEntries.Contains(path) && !CoverCopies.ContainsKey(path))
             {
                 return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"an envelope may not have the entry \"{path}\"", path);
             }
@@ -64,6 +75,12 @@ public static partial class MocaReader
         if (!files.ContainsKey(PackageAge))
         {
             return Fail(DiagnosticCodes.E005EnvelopeInvalid, "the envelope has no package.age");
+        }
+
+        var covers = CoverCopies.Keys.Where(files.ContainsKey).ToList();
+        if (covers.Count > 1)
+        {
+            return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"an envelope has at most one cover copy, and this one has {string.Join(", ", covers)}", covers[1]);
         }
 
         foreach (var name in new[] { PackageAge, IndexAge })
@@ -86,6 +103,12 @@ public static partial class MocaReader
 
         // Steps 3–6.
         var structure = files.TryGetValue(StructureCopy, out var copy) ? source.Read(copy) : null;
+        var cover = covers.Count == 1 ? new EnvelopeCover(covers[0], source.Read(files[covers[0]])) : null;
+        if (cover is not null && cover.Bytes.Length > options.Limits.MaxImageBytes)
+        {
+            return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"{cover.Name} is {cover.Bytes.Length} bytes, over the limit of {options.Limits.MaxImageBytes}", cover.Name);
+        }
+
         var (plain, code, message) = await OpenAgeEntryAsync(source.Read(files[PackageAge]), "package", outline, options, cancellationToken).ConfigureAwait(false);
         if (plain is null)
         {
@@ -93,7 +116,7 @@ public static partial class MocaReader
         }
 
         // Steps 7–10, with the outline check (step 8) right after the inner manifest is read.
-        var inner = await readInner(plain, new EnvelopeCheck(outline, structure)).ConfigureAwait(false);
+        var inner = await readInner(plain, new EnvelopeCheck(outline, structure, cover)).ConfigureAwait(false);
         var failed = inner.Manifest is null || inner.Diagnostics.Any(d =>
             d.Severity == DiagnosticSeverity.Error && (d.Code[0] is 'T' or 'P' || d.Code == DiagnosticCodes.E004OutlineMismatch));
         if (failed)
@@ -128,7 +151,7 @@ public static partial class MocaReader
     }
 
     /// <summary>The outline check (encrypted packages §3); null when it passes.</summary>
-    private static string? OutlineMismatch(EnvelopeCheck check, JsonObject manifest, IReadOnlyDictionary<string, byte[]> bytes)
+    private static string? OutlineMismatch(EnvelopeCheck check, JsonObject manifest, IReadOnlyDictionary<string, byte[]> bytes, ReaderLimits limits)
     {
         foreach (var (key, value) in check.Outline ?? [])
         {
@@ -153,6 +176,31 @@ public static partial class MocaReader
             if (!inner.AsSpan().SequenceEqual(check.Structure))
             {
                 return "the structure copy differs from structure.ttl";
+            }
+        }
+
+        if (check.Cover is { } copyOfCover)
+        {
+            // The first images entry with role cover, which must pass its checks (package spec §4.6).
+            var first = (manifest["images"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(i => JsonValues.StringOf(i["role"]) == "cover");
+            if (first is null || JsonValues.StringOf(first["src"]) is not { } src || JsonValues.StringOf(first["type"]) is not { } type)
+            {
+                return "the envelope has a cover copy, and the manifest has no cover image";
+            }
+
+            if (CatalogueChecks.ImageProblem(src, type, bytes, limits.MaxImageBytes) is { } problem)
+            {
+                return $"the envelope has a cover copy, and the manifest's cover fails its checks: {problem}";
+            }
+
+            if (CoverCopies[copyOfCover.Name] != type)
+            {
+                return $"the cover copy {copyOfCover.Name} does not match the cover's type {type}";
+            }
+
+            if (!bytes[src.Normalize(NormalizationForm.FormC)].AsSpan().SequenceEqual(copyOfCover.Bytes))
+            {
+                return $"the cover copy differs from {src}";
             }
         }
 

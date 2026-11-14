@@ -128,7 +128,7 @@ public static partial class MocaReader
         }
 
         result.Manifest = manifest;
-        if (envelopeCheck is not null && OutlineMismatch(envelopeCheck, manifest, bytes) is { } why)
+        if (envelopeCheck is not null && OutlineMismatch(envelopeCheck, manifest, bytes, options.Limits) is { } why)
         {
             diagnostics.Add(DiagnosticCodes.E004OutlineMismatch, why, PackageDigest.ManifestFile);
             return Finish(result, diagnostics);
@@ -139,6 +139,8 @@ public static partial class MocaReader
         if (!diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
         {
             result.Distribution = JsonValues.StringOf(manifest["distribution"]) ?? "open";
+            // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
+            result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
         }
         result.Profiles = (manifest["profiles"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? [];
         // Package spec §14: M008 only for a declared mocaVersion below 0.4; M009 for one newer than this Reader's.
@@ -439,6 +441,13 @@ public static partial class MocaReader
         if (!result.Valid)
         {
             return result;
+        }
+
+        if (result.PendingCatalogue is { } catalogue)
+        {
+            result.Images = catalogue.Images;
+            result.Translations = catalogue.Translations;
+            result.Tags = catalogue.Tags;
         }
 
         var capabilities = new SortedSet<string>(StringComparer.Ordinal) { "core" };

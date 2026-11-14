@@ -41,6 +41,14 @@ public static class DiagnosticCodes
     public const string M008DigestV1Package = "M008_DIGEST_V1_PACKAGE";
     /// <summary>The package was written for a newer mocaVersion than this Reader implements; it is read on a best-effort basis.</summary>
     public const string M009MocaVersionNewer = "M009_MOCA_VERSION_NEWER";
+    /// <summary>A manifest image is missing, over maxImageBytes, or does not start with the signature of its type. It is left out of the result.</summary>
+    public const string M010ImageInvalid = "M010_IMAGE_INVALID";
+    /// <summary>A key of translations is not a tag in locales.</summary>
+    public const string M011TranslationLocaleUndeclared = "M011_TRANSLATION_LOCALE_UNDECLARED";
+    /// <summary>Two tags in one list are equal, compared case-insensitively. The repeat is dropped.</summary>
+    public const string M012TagDuplicate = "M012_TAG_DUPLICATE";
+    /// <summary>A translated alt text names no image in images. It is dropped.</summary>
+    public const string M013AltImageUnknown = "M013_ALT_IMAGE_UNKNOWN";
 
     // Content (OKF bundle rules plus MOCA extensions)
     /// <summary>A concept document has no YAML frontmatter (OKF MUST).</summary>
@@ -163,6 +171,10 @@ public static class DiagnosticCodes
         [M007UnregisteredUrn] = DiagnosticSeverity.Info,
         [M008DigestV1Package] = DiagnosticSeverity.Info,
         [M009MocaVersionNewer] = DiagnosticSeverity.Warning,
+        [M010ImageInvalid] = DiagnosticSeverity.Warning,
+        [M011TranslationLocaleUndeclared] = DiagnosticSeverity.Error,
+        [M012TagDuplicate] = DiagnosticSeverity.Warning,
+        [M013AltImageUnknown] = DiagnosticSeverity.Warning,
         [C001FrontmatterMissing] = DiagnosticSeverity.Error,
         [C002FrontmatterInvalid] = DiagnosticSeverity.Error,
         [C003TypeMissing] = DiagnosticSeverity.Error,

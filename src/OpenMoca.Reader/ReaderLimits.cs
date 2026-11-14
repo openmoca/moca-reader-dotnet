@@ -44,4 +44,7 @@ public sealed record ReaderLimits
 
     /// <summary>The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt (encrypted packages §4).</summary>
     public int MaxScryptWorkFactor { get; init; } = 20;
+
+    /// <summary>The bytes of one manifest image (M010), or of an envelope's cover copy (E005) (package spec §4.6, contract §3).</summary>
+    public int MaxImageBytes { get; init; } = 1024 * 1024;
 }
