@@ -139,6 +139,12 @@ public static partial class MocaReader
         if (!diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
         {
             result.Distribution = JsonValues.StringOf(manifest["distribution"]) ?? "open";
+            // Package spec §4.9: advice, exposed as declared and never fetched, resolved or opened.
+            if (manifest["apps"] is JsonArray apps)
+            {
+                result.Apps = [.. apps.Select(JsonValues.StringOf).OfType<string>()];
+            }
+
             // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
             result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
         }

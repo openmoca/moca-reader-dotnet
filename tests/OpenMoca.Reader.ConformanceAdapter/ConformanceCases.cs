@@ -98,6 +98,7 @@ public static class ConformanceCases
             ["images"] = result.Images is { } images ? new JsonArray([.. images.Select(ImageJson)]) : null,
             ["translations"] = result.Translations is { } translations ? TranslationsJson(translations) : null,
             ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
+            ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
         };

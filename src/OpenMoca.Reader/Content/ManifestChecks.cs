@@ -11,7 +11,7 @@ internal static partial class ManifestChecks
     public static readonly HashSet<string> ManifestKeys =
     [
         "$schema", "mocaVersion", "id", "version", "title", "description", "language", "locales", "license",
-        "publisher", "distribution", "images", "translations", "tags", "validFrom", "validUntil", "members", "relations", "profiles",
+        "publisher", "distribution", "images", "translations", "tags", "apps", "validFrom", "validUntil", "members", "relations", "profiles",
     ];
 
     // URN namespaces registered with IANA that are commonly used as package ids. Not exhaustive: M007 is informational.

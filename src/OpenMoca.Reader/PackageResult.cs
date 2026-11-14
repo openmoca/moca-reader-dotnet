@@ -91,6 +91,13 @@ public sealed class PackageResult
     /// <summary>The package tags without repeats (package spec §4.8). Null when the manifest has none or the package is invalid.</summary>
     public IReadOnlyList<string>? Tags { get; internal set; }
 
+    /// <summary>
+    /// Where the publisher suggests the package is opened, as declared: https: URIs naming apps and app-type tokens,
+    /// first preferred (package spec §4.9). Null when the manifest has none or fails its schema. Advice only: the
+    /// Reader never fetches, resolves or opens an app URI.
+    /// </summary>
+    public IReadOnlyList<string>? Apps { get; internal set; }
+
     /// <summary>Images, translations and tags, held until the package is known to be valid.</summary>
     internal Catalogue? PendingCatalogue { get; set; }
 
