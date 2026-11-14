@@ -1,6 +1,7 @@
 using OpenMoca.Reader.Json;
 using System.Text;
 using OpenMoca.Reader.Citations;
+using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Structure;
 
 namespace OpenMoca.Reader.Search;
@@ -55,6 +56,12 @@ public sealed class MocaSearch
         _overfetch = overfetch;
     }
 
+    /// <summary>
+    /// The findings of the latest <see cref="SearchAsync"/> call on this search, such as S008 (Reader interface §5.1).
+    /// Empty when it found none.
+    /// </summary>
+    public IReadOnlyList<Diagnostic> Diagnostics { get; private set; } = [];
+
     /// <summary>The library searched, or null for a search over a store backend.</summary>
     public Library? Library => _library;
 
@@ -81,6 +88,18 @@ public sealed class MocaSearch
         // The caller's concepts and scope bind the gate. Ingress may narrow what the backend searches,
         // but can never widen what the caller asked for.
         var caller = options with { Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null };
+        var findings = new DiagnosticBag();
+        // Contract §9: an upTo that no loaded reading order places limits nothing, and never silently.
+        if (caller.UpTo is { } upTo)
+        {
+            IEnumerable<string> digests = _library is not null ? loaded.Keys : _states!.Keys;
+            if (!digests.Any(d => ReadingOrderOf(d, loaded)?.Positions.ContainsKey(upTo) == true))
+            {
+                findings.Add(DiagnosticCodes.S008UpToUnresolved, $"upTo {upTo} is on no loaded package's reading order; it limits nothing");
+            }
+        }
+
+        Diagnostics = findings.Items;
         var request = caller;
         var hookContext = new HookContext(request, _library, _library?.Structure, _audiences, now);
         var effectiveQuery = query;

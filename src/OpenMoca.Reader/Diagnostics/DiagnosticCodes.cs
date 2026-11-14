@@ -155,6 +155,8 @@ public static class DiagnosticCodes
     public const string S006ModelMismatch = "S006_MODEL_MISMATCH";
     /// <summary>A loaded package has no vectors a dense backend can search; that package is not searched.</summary>
     public const string S007NoVectors = "S007_NO_VECTORS";
+    /// <summary>A search's upTo is on no loaded package's reading order, neither a member nor a descendant of one. It limits nothing.</summary>
+    public const string S008UpToUnresolved = "S008_UPTO_UNRESOLVED";
 
     private static readonly Dictionary<string, DiagnosticSeverity> Severities = new()
     {
@@ -220,6 +222,7 @@ public static class DiagnosticCodes
         [S005SidecarFormatUnknown] = DiagnosticSeverity.Info,
         [S006ModelMismatch] = DiagnosticSeverity.Warning,
         [S007NoVectors] = DiagnosticSeverity.Warning,
+        [S008UpToUnresolved] = DiagnosticSeverity.Warning,
     };
 
     /// <summary>Every code this Reader can report.</summary>

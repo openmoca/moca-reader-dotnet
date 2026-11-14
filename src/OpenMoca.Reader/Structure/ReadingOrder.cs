@@ -56,13 +56,14 @@ public sealed record ReadingOrder
     }
 
     /// <summary>
-    /// Reader contract §9: whether a record passes <paramref name="upTo"/>. A package whose reading order does not
-    /// have it as a member is not limited, nor is a record bound to no concept on it.
+    /// Reader contract §9: whether a record passes <paramref name="upTo"/>. It is placed as any concept is, so a
+    /// descendant limits as the first member that contains it. A package whose reading order does not place it is
+    /// not limited, nor is a record bound to no concept on it.
     /// </summary>
     public static bool Passes(CitationRecord record, ReadingOrder? order, string upTo)
     {
         ArgumentNullException.ThrowIfNull(record);
-        if (order is null || !order.Members.Contains(upTo, StringComparer.Ordinal) || !order.Positions.TryGetValue(upTo, out var limit))
+        if (order is null || !order.Positions.TryGetValue(upTo, out var limit))
         {
             return true;
         }

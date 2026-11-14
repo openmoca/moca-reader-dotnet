@@ -208,7 +208,9 @@ public static class ConformanceCases
             var allowPaths = (o["allow"] as JsonArray ?? []).Select(Str).OfType<string>().Select(t => Path.GetFullPath(Path.Combine(root, t))).ToHashSet();
             var allowedDigests = sources.Where(kv => allowPaths.Contains(kv.Value)).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
             var allowed = library.Packages.Where(p => allowedDigests.Contains(p.Result.Digest!)).Select(p => PackageState.From(p.Result));
-            records = await new MocaSearch(allowed, () => now, store, audiences, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true) { AllowUnlabelled = allowUnlabelled }.SearchAsync(query, options, cancellationToken);
+            var mocaSearch = new MocaSearch(allowed, () => now, store, audiences, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true) { AllowUnlabelled = allowUnlabelled };
+            records = await mocaSearch.SearchAsync(query, options, cancellationToken);
+            codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
         }
         else
         {
@@ -230,7 +232,10 @@ public static class ConformanceCases
                 "ontology-guided" => OntologyGuided.Hooks(),
                 _ => null,
             };
-            records = await new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled }.SearchAsync(query, options, cancellationToken);
+            var mocaSearch = new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled };
+            records = await mocaSearch.SearchAsync(query, options, cancellationToken);
+            // Contract §9: the search's own findings, such as S008.
+            codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
         }
 
         return new JsonObject
