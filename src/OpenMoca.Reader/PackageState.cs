@@ -41,6 +41,11 @@ public sealed partial record PackageState
     /// <summary>Each node file's <c>moca.contested_by</c>.</summary>
     [JsonPropertyName("contests")] public IReadOnlyDictionary<string, IReadOnlyList<string>> Contests { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
 
+    /// <summary>The package's reading order, when it resolves (package spec §4.10), so a store search applies upTo.</summary>
+    [JsonPropertyName("readingOrder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OpenMoca.Reader.Structure.ReadingOrder? ReadingOrder { get; init; }
+
     /// <summary>The state of a valid package result.</summary>
     public static PackageState From(PackageResult result)
     {
@@ -65,6 +70,7 @@ public sealed partial record PackageState
             Signers = [.. result.Signers],
             Reviews = result.ReviewsByFile.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<AttestedReview>)[.. kv.Value], StringComparer.Ordinal),
             Contests = contests,
+            ReadingOrder = result.ResolvedReadingOrder,
         };
     }
 

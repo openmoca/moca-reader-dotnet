@@ -176,6 +176,21 @@ public static partial class MocaReader
 
         result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits);
         result.Structure = PackageStructure.Read(bytes, result.Nodes, diagnostics, options.Limits, result.Digest);
+        // Package spec §4.10: readingOrder resolves against the package's own structure.ttl only.
+        if (JsonValues.StringOf(manifest["readingOrder"]) is { } readingOrder && !diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
+        {
+            if (ReadingOrder.Resolve(result.Structure?.Graph, readingOrder) is { } order)
+            {
+                result.ReadingOrder = order.Iri;
+                result.ResolvedReadingOrder = order;
+            }
+            else
+            {
+                diagnostics.Add(DiagnosticCodes.M014ReadingOrderUnresolved,
+                    $"readingOrder {readingOrder} is not an ordered collection with a member list in structure.ttl; it is ignored",
+                    PackageDigest.ManifestFile);
+            }
+        }
         var members = (manifest["members"] as JsonArray ?? []).OfType<JsonObject>().ToList();
         if (result.Nodes.Count == 0 && members.Count == 0)
         {

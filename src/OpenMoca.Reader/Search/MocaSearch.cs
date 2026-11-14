@@ -1,6 +1,7 @@
 using OpenMoca.Reader.Json;
 using System.Text;
 using OpenMoca.Reader.Citations;
+using OpenMoca.Reader.Structure;
 
 namespace OpenMoca.Reader.Search;
 
@@ -127,10 +128,10 @@ public sealed class MocaSearch
         var concepts = ConceptsFor(request);
         var digests = _library is not null ? _library.Packages.Select(p => p.Result.Digest!).ToList() : [.. _allowed!];
         var filters = new SearchFilters(digests, exclude, _audiences, request.Locale, concepts, _allowUnlabelled);
-        // Fetch more than the limit when the gate may drop hits (no pushdown), or when an egress hook reorders
-        // them and needs candidates to choose from.
+        // Fetch more than the limit when the gate may drop hits (no pushdown, or upTo, which has no pushdown filter),
+        // or when an egress hook reorders them and needs candidates to choose from.
         var pushdown = _backend.Features.HasFlag(BackendFeatures.FilterPushdown);
-        var fetch = pushdown && _hooks.Egress is null ? request.Limit : Math.Min(request.Limit * _overfetch, MaxFetch);
+        var fetch = pushdown && _hooks.Egress is null && request.UpTo is null ? request.Limit : Math.Min(request.Limit * _overfetch, MaxFetch);
         return (fetch, filters);
     }
 
@@ -147,6 +148,11 @@ public sealed class MocaSearch
         var distinct = set.Distinct(StringComparer.Ordinal).ToList();
         return distinct.Count > 0 ? distinct : null;
     }
+
+    private ReadingOrder? ReadingOrderOf(string digest, Dictionary<string, PackageResult> loaded) =>
+        _library is not null
+            ? loaded.GetValueOrDefault(digest)?.ResolvedReadingOrder
+            : _states!.GetValueOrDefault(digest)?.ReadingOrder;
 
     private List<CitationRecord> Resolve(IReadOnlyList<SearchHit> hits, DateTimeOffset now, RelationIndex index, Dictionary<string, PackageResult> loaded)
     {
@@ -223,6 +229,12 @@ public sealed class MocaSearch
             }
 
             if (concepts is not null && !(record.Concepts ?? []).Any(concepts.Contains))
+            {
+                continue;
+            }
+
+            // Contract §9.2 step 6: upTo follows the caller; an ingress hook never changes it.
+            if (caller.UpTo is { } upTo && !ReadingOrder.Passes(record, ReadingOrderOf(record.Package.Digest, loaded), upTo))
             {
                 continue;
             }

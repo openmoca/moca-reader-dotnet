@@ -7,7 +7,21 @@ All notable changes to OpenMoca.Reader and its bindings. The format follows [Kee
 
 For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5) and
 [moca-spec#7](https://github.com/openmoca/moca-spec/issues/7) and
-[moca-spec#8](https://github.com/openmoca/moca-spec/issues/8)).
+[moca-spec#8](https://github.com/openmoca/moca-spec/issues/8) and
+[moca-spec#9](https://github.com/openmoca/moca-spec/issues/9)).
+
+### Added (package spec §4.10, Reader contract §9)
+
+- `PackageResult.ReadingOrder` when the manifest's `readingOrder` names an
+  ordered collection with a member list in the package's own
+  `structure.ttl`; otherwise `M014_READING_ORDER_UNRESOLVED` (warning) and
+  it is ignored.
+- `SearchOptions.UpTo`: in a package whose reading order has it as a member,
+  records bound to a concept placed after it are left out. Records off the
+  reading order, and other packages, are not limited. It runs in the gate
+  and follows the caller only.
+- `PackageState.ReadingOrder` (`Structure.ReadingOrder`), so a store search
+  applies `UpTo` too.
 
 ### Added (package spec §4.9)
 

@@ -44,6 +44,9 @@ public sealed class CollectionEntry(string iri, FactSource source)
     /// <summary>Members in list order.</summary>
     public List<string> Members { get; } = [];
 
+    /// <summary>Whether a layer states that this is a <c>skos:OrderedCollection</c>.</summary>
+    public bool Typed { get; internal set; }
+
     internal SortedDictionary<int, string> Positions { get; } = [];
 }
 
@@ -79,7 +82,7 @@ public sealed class StructureGraph
                     Concept(f.S).Declared ??= source;
                     break;
                 case "collection":
-                    CollectionFor(f.S, source);
+                    CollectionFor(f.S, source).Typed = true;
                     break;
                 case "member":
                     var collection = CollectionFor(f.S, source);

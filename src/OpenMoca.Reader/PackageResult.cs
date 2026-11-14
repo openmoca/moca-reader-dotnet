@@ -98,6 +98,15 @@ public sealed class PackageResult
     /// </summary>
     public IReadOnlyList<string>? Apps { get; internal set; }
 
+    /// <summary>
+    /// The IRI of the ordered collection the package is read in (package spec §4.10), when it resolves against the
+    /// package's own structure.ttl; null otherwise.
+    /// </summary>
+    public string? ReadingOrder { get; internal set; }
+
+    /// <summary>The resolved reading order, for search (Reader contract §9).</summary>
+    internal OpenMoca.Reader.Structure.ReadingOrder? ResolvedReadingOrder { get; set; }
+
     /// <summary>Images, translations and tags, held until the package is known to be valid.</summary>
     internal Catalogue? PendingCatalogue { get; set; }
 

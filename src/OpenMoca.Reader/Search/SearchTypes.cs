@@ -105,6 +105,12 @@ public sealed record SearchOptions
 
     /// <summary>Keep records bound to this concept or its descendants.</summary>
     public string? Scope { get; init; }
+
+    /// <summary>
+    /// A member of a package's reading order: leave out material that comes after it (Reader contract §9). Follows the
+    /// caller only; an ingress hook never changes it.
+    /// </summary>
+    public string? UpTo { get; init; }
 }
 
 /// <summary>What an ingress hook may change: the query, and the concepts or scope the backend searches.</summary>

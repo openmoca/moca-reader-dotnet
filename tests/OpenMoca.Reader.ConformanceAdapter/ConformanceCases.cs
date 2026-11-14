@@ -99,6 +99,7 @@ public static class ConformanceCases
             ["translations"] = result.Translations is { } translations ? TranslationsJson(translations) : null,
             ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
             ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
+            ["readingOrder"] = result.ReadingOrder,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
         };
@@ -178,6 +179,7 @@ public static class ConformanceCases
             Locale = Str(search["locale"]),
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
+            UpTo = Str(search["upTo"]),
         };
         var audiences = o["audiences"] is JsonArray aud ? aud.Select(Str).OfType<string>().ToList() : null;
         var query = Str(search["query"]) ?? "";

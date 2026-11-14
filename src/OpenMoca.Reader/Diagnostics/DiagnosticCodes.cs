@@ -49,6 +49,8 @@ public static class DiagnosticCodes
     public const string M012TagDuplicate = "M012_TAG_DUPLICATE";
     /// <summary>A translated alt text names no image in images. It is dropped.</summary>
     public const string M013AltImageUnknown = "M013_ALT_IMAGE_UNKNOWN";
+    /// <summary>readingOrder does not name an ordered collection with a member list in the package's own structure.ttl. It is ignored.</summary>
+    public const string M014ReadingOrderUnresolved = "M014_READING_ORDER_UNRESOLVED";
 
     // Content (OKF bundle rules plus MOCA extensions)
     /// <summary>A concept document has no YAML frontmatter (OKF MUST).</summary>
@@ -175,6 +177,7 @@ public static class DiagnosticCodes
         [M011TranslationLocaleUndeclared] = DiagnosticSeverity.Error,
         [M012TagDuplicate] = DiagnosticSeverity.Warning,
         [M013AltImageUnknown] = DiagnosticSeverity.Warning,
+        [M014ReadingOrderUnresolved] = DiagnosticSeverity.Warning,
         [C001FrontmatterMissing] = DiagnosticSeverity.Error,
         [C002FrontmatterInvalid] = DiagnosticSeverity.Error,
         [C003TypeMissing] = DiagnosticSeverity.Error,
