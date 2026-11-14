@@ -54,9 +54,10 @@ public sealed class AgeTests
 
     /// <summary>Why a vector is not run. Each reason is recorded in the 0.7.0 notes.</summary>
     private static string? SkipReason(Vector v) =>
-        v.Armored ? "ASCII armor: envelopes carry binary age only (encrypted packages §4)"
-        : v.Identities.Any(i => i.StartsWith("AGE-SECRET-KEY-PQ-1", StringComparison.Ordinal)) ? "hybrid (ML-KEM) identity: Readers unwrap X25519 and scrypt only"
-        : null;
+        v.Armored ? "ASCII armor: envelopes carry binary age only (encrypted packages §4)" : null;
+
+    // A hybrid (ML-KEM) vector: Readers do not unwrap its stanzas, so it is run parse-only.
+    private static bool IsHybrid(Vector v) => v.Identities.Any(i => i.StartsWith("AGE-SECRET-KEY-PQ-1", StringComparison.Ordinal));
 
     public static TheoryData<string> Vectors()
     {
@@ -79,6 +80,23 @@ public sealed class AgeTests
         var v = Parse(name);
         var skip = SkipReason(v);
         Assert.SkipWhen(skip is not null, skip ?? "");
+        if (IsHybrid(v))
+        {
+            // The parser sees every hybrid vector: a valid header parses, and then no key unwraps it (E001).
+            AgeHeader parsed;
+            try
+            {
+                parsed = AgeDecryptor.ParseHeader(v.Body, 22);
+            }
+            catch (AgeException e) when (e.Failure == AgeFailure.Header)
+            {
+                Assert.Equal("header failure", v.Expect);
+                return;
+            }
+
+            Assert.Equal(AgeFailure.NoKey, Assert.Throws<AgeException>(() => AgeDecryptor.Decrypt(v.Body, parsed, new AgeKey())).Failure);
+            return;
+        }
 
         var (expect, payload) = Outcome(v);
         Assert.Equal(v.Expect, expect);
@@ -136,19 +154,92 @@ public sealed class AgeTests
     }
 
     [Fact]
-    public void WorkFactorLimit_RefusesBeforeScrypt()
+    public void WorkFactorLimit_RefusesBeforeScrypt_AndMustBeFrom1To22()
     {
-        var e = Assert.Throws<AgeException>(() => AgeDecryptor.ParseHeader(Parse("scrypt").Body, 9));
-        Assert.Equal(AgeFailure.Header, e.Failure);
+        var body = Parse("scrypt").Body;
+        Assert.Equal(AgeFailure.Header, Assert.Throws<AgeException>(() => AgeDecryptor.ParseHeader(body, 9)).Failure);
+        // A limit outside 1–22 never disables the check (and 1 << 31 can never be reached).
+        foreach (var bad in new[] { 0, -1, 23, 31, 40, int.MaxValue })
+        {
+            Assert.Equal(AgeFailure.Header, Assert.Throws<AgeException>(() => AgeDecryptor.ParseHeader(body, bad)).Failure);
+        }
     }
 
     [Fact]
-    public void DecryptedBytes_CountAgainstMaxBytes()
+    public void DecryptedBytes_CountAgainstMaxBytes_BeforeDecrypting_AndExactlyEqualPasses()
     {
         var v = Parse("stream_two_chunks");
         var header = AgeDecryptor.ParseHeader(v.Body);
-        var e = Assert.Throws<AgeException>(() => AgeDecryptor.Decrypt(v.Body, header, new AgeKey(Identities: v.Identities), 1000));
-        Assert.Equal(AgeFailure.Limit, e.Failure);
+        var key = new AgeKey(Identities: v.Identities);
+        Assert.Equal(AgeFailure.Limit, Assert.Throws<AgeException>(() => AgeDecryptor.Decrypt(v.Body, header, key, 1000)).Failure);
+        var plain = AgeDecryptor.Decrypt(v.Body, header, key);
+        Assert.Equal(plain.Length, AgeDecryptor.Decrypt(v.Body, header, key, plain.Length).Length);
+        Assert.Equal(AgeFailure.Limit, Assert.Throws<AgeException>(() => AgeDecryptor.Decrypt(v.Body, header, key, plain.Length - 1)).Failure);
+    }
+
+    [Fact]
+    public void PlaintextLength_ComesFromTheCiphertextLength()
+    {
+        const long full = (64 * 1024) + 16;
+        Assert.Equal(0, AgeDecryptor.PlaintextLength(16, long.MaxValue));
+        Assert.Equal(64 * 1024, AgeDecryptor.PlaintextLength(full, long.MaxValue));
+        Assert.Equal((64 * 1024) + 1, AgeDecryptor.PlaintextLength(full + 17, long.MaxValue));
+        foreach (var bad in new long[] { 0, 15, full + 16, full + 15 })
+        {
+            Assert.Equal(AgeFailure.Payload, Assert.Throws<AgeException>(() => AgeDecryptor.PlaintextLength(bad, long.MaxValue)).Failure);
+        }
+
+        Assert.Equal(AgeFailure.Limit, Assert.Throws<AgeException>(() => AgeDecryptor.PlaintextLength(full, 100)).Failure);
+    }
+
+    [Fact]
+    public void KeyResults_WrongKindsAreNoKey_BadKeysAreNoMatch_SeveralKindsAreAllTried()
+    {
+        var x = Parse("x25519");
+        var s = Parse("scrypt");
+        var xh = AgeDecryptor.ParseHeader(x.Body);
+        var sh = AgeDecryptor.ParseHeader(s.Body, 22);
+        AgeFailure? Outcome(byte[] body, AgeHeader header, AgeKey? key)
+        {
+            try
+            {
+                AgeDecryptor.Decrypt(body, header, key);
+                return null;
+            }
+            catch (AgeException e)
+            {
+                return e.Failure;
+            }
+        }
+
+        Assert.Equal(AgeFailure.NoKey, Outcome(x.Body, xh, new AgeKey(Passphrase: "p")));
+        Assert.Equal(AgeFailure.NoKey, Outcome(s.Body, sh, new AgeKey(Identities: x.Identities)));
+        Assert.Equal(AgeFailure.NoKey, Outcome(x.Body, xh, null));
+        Assert.Equal(AgeFailure.NoMatch, Outcome(x.Body, xh, new AgeKey(Identities: ["not an identity"])));
+        Assert.Equal(AgeFailure.NoMatch, Outcome(x.Body, xh, new AgeKey(Identities: [null!])));
+        Assert.Equal(AgeFailure.NoMatch, Outcome(x.Body, xh, new AgeKey(FileKey: new byte[15])));
+        // A wrong file key beside the right identities: identities are tried first.
+        Assert.Null(Outcome(x.Body, xh, new AgeKey(Identities: x.Identities, FileKey: new byte[16])));
+        // A passphrase for an X25519 file beside the right identities.
+        Assert.Null(Outcome(x.Body, xh, new AgeKey(Identities: x.Identities, Passphrase: "p")));
+    }
+
+    [Fact]
+    public void Header_HoldsAtMost256Stanzas()
+    {
+        static byte[] Header(int n) => Encoding.Latin1.GetBytes(
+            "age-encryption.org/v1\n" + string.Concat(Enumerable.Repeat("-> moca-pad x\n\n", n)) + "--- " + new string('A', 43) + "\n" + new string('\0', 16));
+        var e = Assert.Throws<AgeException>(() => AgeDecryptor.ParseHeader(Header(AgeDecryptor.MaxStanzas + 1)));
+        Assert.Contains("more than 256", e.Message, StringComparison.Ordinal);
+        Assert.Equal(AgeDecryptor.MaxStanzas, AgeDecryptor.ParseHeader(Header(AgeDecryptor.MaxStanzas)).Stanzas.Count);
+    }
+
+    /// <summary>CI installs the Go age CLI and sets MOCA_REQUIRE_GO_AGE, so the cross-check never skips there.</summary>
+    [Fact]
+    public void GoAge_IsInstalledWhereRequired()
+    {
+        Assert.SkipWhen(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MOCA_REQUIRE_GO_AGE")), "MOCA_REQUIRE_GO_AGE is not set");
+        Assert.True(Run("age", ["--version"], [], null).Code == 0, "MOCA_REQUIRE_GO_AGE is set, and `age` is not on the PATH");
     }
 
     [Fact]
@@ -199,6 +290,15 @@ public sealed class AgeTests
             catch (AgeException)
             {
                 ours = null;
+            }
+
+            // MOCA's own limit: a header over 64 KiB is E006 here, and Go age has no such limit.
+            if (Path.GetFileName(path) == "header-over-64k.moca.enc")
+            {
+                Assert.Null(ours);
+                Assert.Equal(0, go.Code);
+                compared++;
+                continue;
             }
 
             // The mixed-stanza fixture: Go age fails at the MAC, this module at the header. Both refuse it.

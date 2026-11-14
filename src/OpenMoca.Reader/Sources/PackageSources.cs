@@ -121,12 +121,26 @@ public static class PackageSources
 
         if (eocd < 0)
         {
-            return methods; // ZipArchive reports a damaged archive.
+            return methods; // ZipArchive reports a damaged archive; envelope checks treat a missing entry as E005.
         }
 
-        var count = BitConverter.ToUInt16(archive, eocd + 10);
+        long count = BitConverter.ToUInt16(archive, eocd + 10);
         long offset = BitConverter.ToUInt32(archive, eocd + 16);
-        for (var n = 0; n < count && offset + 46 <= archive.Length; n++)
+        // Zip64: the end record's fields are all ones, and the Zip64 end record (found through its locator, just
+        // before the end record) holds the real entry count and central-directory offset.
+        if ((count == 0xFFFF || offset == 0xFFFFFFFF) && eocd >= 20 && BitConverter.ToUInt32(archive, eocd - 20) == 0x07064b50)
+        {
+            var zip64 = BitConverter.ToInt64(archive, eocd - 20 + 8);
+            if (zip64 < 0 || zip64 + 56 > archive.Length || BitConverter.ToUInt32(archive, (int)zip64) != 0x06064b50)
+            {
+                return methods;
+            }
+
+            count = BitConverter.ToInt64(archive, (int)zip64 + 32);
+            offset = BitConverter.ToInt64(archive, (int)zip64 + 48);
+        }
+
+        for (long n = 0; n < count && offset >= 0 && offset + 46 <= archive.Length; n++)
         {
             var at = (int)offset;
             if (BitConverter.ToUInt32(archive, at) != 0x02014b50)

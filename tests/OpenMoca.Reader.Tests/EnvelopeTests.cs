@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text;
 using System.Text.RegularExpressions;
 using OpenMoca.Reader.Age;
 using OpenMoca.Reader.Diagnostics;
@@ -142,5 +143,94 @@ public sealed partial class EnvelopeTests
         {
             Directory.Delete(dir, true);
         }
+    }
+
+    [Fact]
+    public async Task KeyProviderError_NeverReachesADiagnostic_OnlyItsTypeName()
+    {
+        var options = WithKey(TestKey) with { KeyProvider = (_, _) => throw new InvalidOperationException("vault https://vault.example/v1?token=s3cret is offline") };
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken);
+        var d = Assert.Single(r.Diagnostics);
+        Assert.Equal(DiagnosticCodes.E001EncryptedNoKey, d.Code);
+        Assert.DoesNotContain("s3cret", d.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("vault.example", d.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(InvalidOperationException), d.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class ThrowingDecryptor(bool inParse) : IEnvelopeDecryptor
+    {
+        public IEnvelopeHeader ParseHeader(byte[] file, int maxScryptWorkFactor) =>
+            inParse ? throw new IndexOutOfRangeException("internal") : AgeEnvelopeDecryptor.Instance.ParseHeader(file, maxScryptWorkFactor);
+
+        public byte[] Decrypt(byte[] file, IEnvelopeHeader header, EnvelopeKey key, long maxBytes) => throw new NullReferenceException("internal");
+    }
+
+    [Fact]
+    public async Task NothingADecryptorThrows_ReachesTheCaller_E006WhileParsingE002After()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(true) }, ct);
+        Assert.Equal([DiagnosticCodes.E006AgeHeaderInvalid], parse.Diagnostics.Select(d => d.Code));
+        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(false) }, ct);
+        Assert.Equal([DiagnosticCodes.E002DecryptionFailed], later.Diagnostics.Select(d => d.Code));
+    }
+
+    [Fact]
+    public async Task WorkFactorLimitOutside1To22_IsAHostError()
+    {
+        foreach (var bad in new[] { 0, 23, 40 })
+        {
+            var options = WithKey(TestKey) with { Limits = ReaderLimits.Default with { MaxScryptWorkFactor = bad } };
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// A Zip64 envelope (the end record's fields all ones, the real ones in a Zip64 end record) whose package.age is
+    /// deflated: the stored-only rule still applies (E005), however the central directory is laid out.
+    /// </summary>
+    [Fact]
+    public async Task Zip64Envelope_WithADeflatedPackage_IsE005()
+    {
+        var zip = File.ReadAllBytes(Fixture("deflated-package.moca.enc"));
+        var eocd = zip.AsSpan().LastIndexOf("PK\u0005\u0006"u8);
+        var count = BitConverter.ToUInt16(zip, eocd + 10);
+        var size = BitConverter.ToUInt32(zip, eocd + 12);
+        var offset = BitConverter.ToUInt32(zip, eocd + 16);
+        using var m = new MemoryStream();
+        m.Write(zip, 0, eocd);
+        var zip64At = m.Length;
+        using (var w = new BinaryWriter(m, Encoding.UTF8, leaveOpen: true))
+        {
+            // The Zip64 end of central directory record.
+            w.Write(0x06064b50u);
+            w.Write(44UL);
+            w.Write((ushort)45);
+            w.Write((ushort)45);
+            w.Write(0u);
+            w.Write(0u);
+            w.Write((ulong)count);
+            w.Write((ulong)count);
+            w.Write((ulong)size);
+            w.Write((ulong)offset);
+            // Its locator.
+            w.Write(0x07064b50u);
+            w.Write(0u);
+            w.Write((ulong)zip64At);
+            w.Write(1u);
+            // The end record, with the Zip64 markers.
+            w.Write(0x06054b50u);
+            w.Write((ushort)0);
+            w.Write((ushort)0);
+            w.Write((ushort)0xFFFF);
+            w.Write((ushort)0xFFFF);
+            w.Write(0xFFFFFFFFu);
+            w.Write(0xFFFFFFFFu);
+            w.Write((ushort)0);
+        }
+
+        var r = await MocaReader.ReadPackageAsync(PackageTarget.FromArchive(m.ToArray()), WithKey(TestKey), TestContext.Current.CancellationToken);
+        Assert.Equal([DiagnosticCodes.E005EnvelopeInvalid], r.Diagnostics.Select(d => d.Code));
+        Assert.Contains("must be stored", r.Diagnostics[0].Message, StringComparison.Ordinal);
     }
 }

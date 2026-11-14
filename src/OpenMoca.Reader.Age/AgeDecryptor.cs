@@ -70,6 +70,18 @@ public static partial class AgeDecryptor
     private const int Tag = 16;
     private const string Bech32Charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
+    /// <summary>Reader contract §3: the header holds at most this many stanzas (E006).</summary>
+    public const int MaxStanzas = 256;
+
+    /// <summary>Reader contract §3: the smallest valid <c>maxScryptWorkFactor</c>.</summary>
+    public const int MinWorkFactorLimit = 1;
+
+    /// <summary>Reader contract §3: the largest valid <c>maxScryptWorkFactor</c>.</summary>
+    public const int MaxWorkFactorLimit = 22;
+
+    /// <summary>Whether a work-factor limit is an integer in 1–22 (Reader contract §3).</summary>
+    public static bool ValidWorkFactorLimit(int limit) => limit is >= MinWorkFactorLimit and <= MaxWorkFactorLimit;
+
     [GeneratedRegex("^[A-Za-z0-9+/]*$")]
     private static partial Regex Base64Chars();
 
@@ -108,7 +120,15 @@ public static partial class AgeDecryptor
     /// </summary>
     public static AgeHeader ParseHeader(ReadOnlySpan<byte> file, int maxScryptWorkFactor = 20)
     {
-        var bytes = file.ToArray();
+        // A limit outside 1–22 is refused, never read as "no limit" (and keeps 1 << n in range).
+        if (!ValidWorkFactorLimit(maxScryptWorkFactor))
+        {
+            throw Fail(AgeFailure.Header, $"maxScryptWorkFactor must be from 1 to 22, not {maxScryptWorkFactor}");
+        }
+
+        // The header is at most 64 KiB, and the payload nonce follows it: nothing past that is copied or searched.
+        var fileLength = file.Length;
+        var bytes = file[..Math.Min(file.Length, MaxHeaderBytes + 16)].ToArray();
         var pos = 0;
 
         (string Text, int Start) Line()
@@ -154,7 +174,7 @@ public static partial class AgeDecryptor
 
                 CheckStanzas(stanzas, maxScryptWorkFactor);
                 // The 16-byte payload nonce counts as header for failure purposes, as the C2SP test kit does.
-                if (bytes.Length - pos < 16)
+                if (fileLength - pos < 16)
                 {
                     throw Fail(AgeFailure.Header, "the payload nonce is missing or short");
                 }
@@ -165,6 +185,11 @@ public static partial class AgeDecryptor
             if (!text.StartsWith("-> ", StringComparison.Ordinal))
             {
                 throw Fail(AgeFailure.Header, "expected a stanza or the MAC line");
+            }
+
+            if (stanzas.Count >= MaxStanzas)
+            {
+                throw Fail(AgeFailure.Header, $"the header has more than {MaxStanzas} stanzas");
             }
 
             var args = text[3..].Split(' ');
@@ -255,7 +280,32 @@ public static partial class AgeDecryptor
         return output;
     }
 
-    /// <summary>ChaCha20-Poly1305 open, from BouncyCastle (not the platform-dependent BCL type); null when it fails.</summary>
+    /// <summary>
+    /// ChaCha20-Poly1305 open, from BouncyCastle (not the platform-dependent BCL type), into <paramref name="output"/>.
+    /// False when it fails; the caller then discards (and zeroes) whatever was written.
+    /// </summary>
+    private static bool OpenInto(byte[] key, byte[] nonce, ReadOnlySpan<byte> sealedBytes, Span<byte> output)
+    {
+        if (sealedBytes.Length < Tag || output.Length != sealedBytes.Length - Tag)
+        {
+            return false;
+        }
+
+        var cipher = new Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305();
+        cipher.Init(false, new AeadParameters(new KeyParameter(key), Tag * 8, nonce));
+        try
+        {
+            var n = cipher.ProcessBytes(sealedBytes, output);
+            cipher.DoFinal(output[n..]);
+            return true;
+        }
+        catch (Org.BouncyCastle.Crypto.InvalidCipherTextException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>ChaCha20-Poly1305 open of a small value (a wrapped file key); null when it fails.</summary>
     private static byte[]? Open(byte[] key, byte[] nonce, ReadOnlySpan<byte> sealedBytes)
     {
         if (sealedBytes.Length < Tag)
@@ -263,20 +313,14 @@ public static partial class AgeDecryptor
             return null;
         }
 
-        var cipher = new Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305();
-        cipher.Init(false, new AeadParameters(new KeyParameter(key), Tag * 8, nonce));
-        var input = sealedBytes.ToArray();
-        var output = new byte[cipher.GetOutputSize(input.Length)];
-        try
+        var output = new byte[sealedBytes.Length - Tag];
+        if (OpenInto(key, nonce, sealedBytes, output))
         {
-            var n = cipher.ProcessBytes(input, 0, input.Length, output, 0);
-            n += cipher.DoFinal(output, n);
-            return output[..n];
+            return output;
         }
-        catch (Org.BouncyCastle.Crypto.InvalidCipherTextException)
-        {
-            return null;
-        }
+
+        CryptographicOperations.ZeroMemory(output);
+        return null;
     }
 
     /// <summary>The 32-byte X25519 scalar of an <c>AGE-SECRET-KEY-1…</c> identity, or null when it is not one.</summary>
@@ -343,139 +387,273 @@ public static partial class AgeDecryptor
         return chk;
     }
 
-    private static byte[] UnwrapX25519(AgeHeader header, IReadOnlyList<string> identities)
+    // The file key an X25519 stanza unwraps with one of the identities, or null. A bad identity is NoMatch (E002).
+    private static byte[]? UnwrapX25519(AgeHeader header, IReadOnlyList<string> identities)
     {
-        var keys = identities.Select(id =>
+        var keys = new List<(byte[] Scalar, byte[] Recipient)>();
+        try
         {
-            var scalar = DecodeIdentity(id) ?? throw Fail(AgeFailure.NoMatch, "an identity from the key provider is not a valid AGE-SECRET-KEY-1 identity");
-            var recipient = new byte[32];
-            X25519.ScalarMultBase(scalar, 0, recipient, 0);
-            return (Scalar: scalar, Recipient: recipient);
-        }).ToList();
-
-        foreach (var s in header.Stanzas.Where(x => x.Type == "X25519"))
-        {
-            var share = Convert.FromBase64String(s.Args[0] + "=");
-            foreach (var (scalar, recipient) in keys)
+            foreach (var id in identities)
             {
-                var shared = new byte[32];
-                // False when the share is a low-order point: the all-zero secret, which age forbids.
-                if (!X25519.CalculateAgreement(scalar, 0, share, 0, shared, 0))
-                {
-                    throw Fail(AgeFailure.Header, "an X25519 share is a low-order point");
-                }
+                var scalar = (id is null ? null : DecodeIdentity(id))
+                    ?? throw Fail(AgeFailure.NoMatch, "an identity from the key provider is not a valid AGE-SECRET-KEY-1 identity");
+                var recipient = new byte[32];
+                X25519.ScalarMultBase(scalar, 0, recipient, 0);
+                keys.Add((scalar, recipient));
+            }
 
-                var fileKey = Open(Hkdf(shared, [.. share, .. recipient], "age-encryption.org/v1/X25519"), new byte[12], s.Body);
-                if (fileKey is { Length: 16 })
+            foreach (var s in header.Stanzas.Where(x => x.Type == "X25519"))
+            {
+                var share = Convert.FromBase64String(s.Args[0] + "=");
+                foreach (var (scalar, recipient) in keys)
                 {
-                    return fileKey;
+                    var shared = new byte[32];
+                    // False when the share is a low-order point: the all-zero secret, which age forbids.
+                    if (!X25519.CalculateAgreement(scalar, 0, share, 0, shared, 0))
+                    {
+                        throw Fail(AgeFailure.Header, "an X25519 share is a low-order point");
+                    }
+
+                    var wrapKey = Hkdf(shared, [.. share, .. recipient], "age-encryption.org/v1/X25519");
+                    var fileKey = Open(wrapKey, new byte[12], s.Body);
+                    CryptographicOperations.ZeroMemory(shared);
+                    CryptographicOperations.ZeroMemory(wrapKey);
+                    if (fileKey is { Length: 16 })
+                    {
+                        return fileKey;
+                    }
+
+                    if (fileKey is not null)
+                    {
+                        CryptographicOperations.ZeroMemory(fileKey);
+                    }
                 }
             }
-        }
 
-        throw Fail(AgeFailure.NoMatch, "no identity unwraps an X25519 stanza");
+            return null;
+        }
+        finally
+        {
+            foreach (var (scalar, _) in keys)
+            {
+                CryptographicOperations.ZeroMemory(scalar);
+            }
+        }
     }
 
-    private static byte[] UnwrapScrypt(AgeStanza stanza, string passphrase)
+    // The file key the passphrase unwraps from the scrypt stanza, or null.
+    private static byte[]? UnwrapScrypt(AgeStanza stanza, string passphrase)
     {
         var salt = Encoding.ASCII.GetBytes("age-encryption.org/v1/scrypt").Concat(Convert.FromBase64String(stanza.Args[0] + "==")).ToArray();
+        // The work factor was checked against the 1–22 limit when the header was parsed, so the shift cannot overflow.
         var n = 1 << int.Parse(stanza.Args[1], System.Globalization.CultureInfo.InvariantCulture);
-        var key = SCrypt.Generate(Encoding.UTF8.GetBytes(passphrase), salt, n, 8, 1, 32);
+        var secret = Encoding.UTF8.GetBytes(passphrase);
+        var key = SCrypt.Generate(secret, salt, n, 8, 1, 32);
+        CryptographicOperations.ZeroMemory(secret);
         var fileKey = Open(key, new byte[12], stanza.Body);
-        return fileKey is { Length: 16 } ? fileKey : throw Fail(AgeFailure.NoMatch, "the passphrase does not unwrap the scrypt stanza");
+        CryptographicOperations.ZeroMemory(key);
+        if (fileKey is { Length: 16 })
+        {
+            return fileKey;
+        }
+
+        if (fileKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(fileKey);
+        }
+
+        return null;
     }
 
     /// <summary>
-    /// Unwraps the file key. <see cref="AgeFailure.NoKey"/> when the key is missing or of a kind no stanza uses;
-    /// <see cref="AgeFailure.NoMatch"/> when it is of the right kind but fails.
+    /// Finds the file key and verifies the header MAC with it (encrypted packages §5.1, §5.2 steps 4–5). A key's kinds
+    /// are tried in order: identities, then the passphrase, then the file key; the first whose file key verifies the
+    /// MAC wins. <see cref="AgeFailure.NoKey"/> when no kind the key has is one the file uses;
+    /// <see cref="AgeFailure.NoMatch"/> or <see cref="AgeFailure.Mac"/> when one was tried and failed. The caller zeroes
+    /// the returned key.
     /// </summary>
-    public static byte[] UnwrapFileKey(AgeHeader header, AgeKey? key)
+    public static byte[] FindFileKey(AgeHeader header, AgeKey? key)
     {
-        if (key?.FileKey is { } fileKey)
+        ArgumentNullException.ThrowIfNull(header);
+        if (key is null)
         {
-            return fileKey.Length == 16 ? fileKey : throw Fail(AgeFailure.NoMatch, "the file key from the key provider is not 16 bytes");
+            throw Fail(AgeFailure.NoKey, "the key provider returned no key");
         }
 
-        if (key?.Identities is { Count: > 0 } identities)
+        if (key.FileKey is { Length: not 16 })
         {
-            return header.Stanzas.Any(s => s.Type == "X25519")
-                ? UnwrapX25519(header, identities)
-                : throw Fail(AgeFailure.NoKey, "the key provider returned identities, and the file has no X25519 stanza");
+            throw Fail(AgeFailure.NoMatch, "the file key from the key provider is not 16 bytes");
         }
 
-        if (key?.Passphrase is { } passphrase)
+        var tried = false;
+        var macFailed = false;
+        byte[]? Accept(byte[]? fileKey)
         {
-            var stanza = header.Stanzas.FirstOrDefault(s => s.Type == "scrypt")
-                ?? throw Fail(AgeFailure.NoKey, "the key provider returned a passphrase, and the file has no scrypt stanza");
-            return UnwrapScrypt(stanza, passphrase);
+            if (fileKey is null)
+            {
+                return null;
+            }
+
+            if (MacOk(header, fileKey))
+            {
+                return fileKey;
+            }
+
+            macFailed = true;
+            CryptographicOperations.ZeroMemory(fileKey);
+            return null;
         }
 
-        throw Fail(AgeFailure.NoKey, "the key provider returned no key");
+        if (key.Identities is { Count: > 0 } identities && header.Stanzas.Any(s => s.Type == "X25519"))
+        {
+            tried = true;
+            if (Accept(UnwrapX25519(header, identities)) is { } found)
+            {
+                return found;
+            }
+        }
+
+        if (key.Passphrase is { } passphrase && header.Stanzas.FirstOrDefault(s => s.Type == "scrypt") is { } stanza)
+        {
+            tried = true;
+            if (Accept(UnwrapScrypt(stanza, passphrase)) is { } found)
+            {
+                return found;
+            }
+        }
+
+        if (key.FileKey is { } given)
+        {
+            tried = true;
+            if (Accept([.. given]) is { } found)
+            {
+                return found;
+            }
+        }
+
+        if (!tried)
+        {
+            throw Fail(AgeFailure.NoKey, key.Identities is { Count: > 0 } || key.Passphrase is not null
+                ? "the key provider returned keys of kinds no stanza in the file uses"
+                : "the key provider returned no key");
+        }
+
+        throw macFailed ? Fail(AgeFailure.Mac, "the header MAC does not verify") : Fail(AgeFailure.NoMatch, "no key from the key provider unwraps a stanza");
+    }
+
+    private static bool MacOk(AgeHeader header, byte[] fileKey)
+    {
+        var macKey = Hkdf(fileKey, [], "header");
+        var hmac = new HMac(new Sha256Digest());
+        hmac.Init(new KeyParameter(macKey));
+        hmac.BlockUpdate(header.HeaderNoMac, 0, header.HeaderNoMac.Length);
+        var mac = new byte[32];
+        hmac.DoFinal(mac, 0);
+        CryptographicOperations.ZeroMemory(macKey);
+        return CryptographicOperations.FixedTimeEquals(mac, header.Mac);
     }
 
     /// <summary>Verifies the header MAC with a constant-time compare. Throws <see cref="AgeFailure.Mac"/>.</summary>
     public static void VerifyMac(AgeHeader header, byte[] fileKey)
     {
-        var hmac = new HMac(new Sha256Digest());
-        hmac.Init(new KeyParameter(Hkdf(fileKey, [], "header")));
-        hmac.BlockUpdate(header.HeaderNoMac, 0, header.HeaderNoMac.Length);
-        var mac = new byte[32];
-        hmac.DoFinal(mac, 0);
-        if (!CryptographicOperations.FixedTimeEquals(mac, header.Mac))
+        ArgumentNullException.ThrowIfNull(header);
+        ArgumentNullException.ThrowIfNull(fileKey);
+        if (!MacOk(header, fileKey))
         {
             throw Fail(AgeFailure.Mac, "the header MAC does not verify");
         }
     }
 
     /// <summary>
-    /// Decrypts and authenticates the whole STREAM payload. Throws <see cref="AgeFailure.Payload"/> on any failure and
-    /// <see cref="AgeFailure.Limit"/> once the plaintext passes <paramref name="maxBytes"/>. Returns nothing until
-    /// every chunk has authenticated.
+    /// The plaintext length of a STREAM payload, from its length alone (encrypted packages §5.2 step 6): every chunk
+    /// but the last is 64 KiB + 16, and the last is 16 to 64 KiB + 16. <see cref="AgeFailure.Payload"/> for a length no
+    /// payload can have; <see cref="AgeFailure.Limit"/> over <paramref name="maxBytes"/> or over what one array holds.
     /// </summary>
-    public static byte[] DecryptPayload(ReadOnlySpan<byte> file, AgeHeader header, byte[] fileKey, long maxBytes = long.MaxValue)
+    public static long PlaintextLength(long ciphertextLength, long maxBytes)
     {
-        var key = Hkdf(fileKey, file.Slice(header.PayloadStart, 16).ToArray(), "payload");
-        using var output = new MemoryStream();
-        var pos = header.PayloadStart + 16;
-        for (long counter = 0; ; counter++)
+        const long full = Chunk + Tag;
+        var chunks = Math.Max(1, (ciphertextLength + full - 1) / full);
+        var last = ciphertextLength - ((chunks - 1) * full);
+        if (ciphertextLength < Tag || last < Tag || (last == Tag && chunks > 1))
         {
-            var remaining = file.Length - pos;
-            var last = remaining <= Chunk + Tag;
-            var sealedBytes = file.Slice(pos, last ? remaining : Chunk + Tag);
-            var nonce = new byte[12];
-            for (var i = 0; i < 8; i++)
-            {
-                nonce[10 - i] = (byte)(counter >> (8 * i));
-            }
+            throw Fail(AgeFailure.Payload, "the payload length is impossible: the final chunk is missing, short or empty after a full chunk");
+        }
 
-            nonce[11] = last ? (byte)1 : (byte)0;
-            var plain = Open(key, nonce, sealedBytes)
-                ?? throw Fail(AgeFailure.Payload, last ? "the final chunk does not authenticate, or is missing" : $"chunk {counter} does not authenticate");
-            if (last && plain.Length == 0 && counter > 0)
-            {
-                throw Fail(AgeFailure.Payload, "an empty final chunk follows a full chunk");
-            }
+        var length = ciphertextLength - (chunks * Tag);
+        if (length > maxBytes || length > Array.MaxLength)
+        {
+            throw Fail(AgeFailure.Limit, $"the decrypted payload would be {length} bytes, over {Math.Min(maxBytes, Array.MaxLength)}");
+        }
 
-            if (output.Length + plain.Length > maxBytes)
-            {
-                throw Fail(AgeFailure.Limit, $"the decrypted payload is over {maxBytes} bytes");
-            }
+        return length;
+    }
 
-            output.Write(plain);
-            if (last)
+    /// <summary>
+    /// Decrypts and authenticates the whole STREAM payload into one array of the exact size, computed first.
+    /// <see cref="AgeFailure.Payload"/> on any failure and <see cref="AgeFailure.Limit"/> over
+    /// <paramref name="maxBytes"/>, both before decrypting. Returns nothing until every chunk has authenticated; on
+    /// failure the partial plaintext is zeroed.
+    /// </summary>
+    public static byte[] DecryptPayload(ReadOnlySpan<byte> file, AgeHeader header, byte[] fileKey, long maxBytes = 512L * 1024 * 1024)
+    {
+        ArgumentNullException.ThrowIfNull(header);
+        ArgumentNullException.ThrowIfNull(fileKey);
+        var start = header.PayloadStart + 16;
+        var output = new byte[PlaintextLength(file.Length - start, maxBytes)];
+        var key = Hkdf(fileKey, file.Slice(header.PayloadStart, 16).ToArray(), "payload");
+        try
+        {
+            var pos = start;
+            var written = 0;
+            for (long counter = 0; ; counter++)
             {
-                return output.ToArray();
-            }
+                var remaining = file.Length - pos;
+                var last = remaining <= Chunk + Tag;
+                var sealedBytes = file.Slice(pos, last ? remaining : Chunk + Tag);
+                var nonce = new byte[12];
+                for (var i = 0; i < 8; i++)
+                {
+                    nonce[10 - i] = (byte)(counter >> (8 * i));
+                }
 
-            pos += Chunk + Tag;
+                nonce[11] = last ? (byte)1 : (byte)0;
+                var size = sealedBytes.Length - Tag;
+                if (!OpenInto(key, nonce, sealedBytes, output.AsSpan(written, size)))
+                {
+                    throw Fail(AgeFailure.Payload, last ? "the final chunk does not authenticate, or is missing" : $"chunk {counter} does not authenticate");
+                }
+
+                written += size;
+                if (last)
+                {
+                    return output;
+                }
+
+                pos += Chunk + Tag;
+            }
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(output);
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
         }
     }
 
-    /// <summary>Unwraps the file key, verifies the MAC and decrypts the payload.</summary>
-    public static byte[] Decrypt(ReadOnlySpan<byte> file, AgeHeader header, AgeKey? key, long maxBytes = long.MaxValue)
+    /// <summary>Finds the file key, verifies the MAC and decrypts the payload; the file key is zeroed after.</summary>
+    public static byte[] Decrypt(ReadOnlySpan<byte> file, AgeHeader header, AgeKey? key, long maxBytes = 512L * 1024 * 1024)
     {
-        var fileKey = UnwrapFileKey(header, key);
-        VerifyMac(header, fileKey);
-        return DecryptPayload(file, header, fileKey, maxBytes);
+        var fileKey = FindFileKey(header, key);
+        try
+        {
+            return DecryptPayload(file, header, fileKey, maxBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(fileKey);
+        }
     }
 }

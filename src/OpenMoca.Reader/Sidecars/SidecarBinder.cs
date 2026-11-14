@@ -133,7 +133,7 @@ public static class SidecarBinder
             return Fail(DiagnosticCodes.S001SidecarInvalid, "the envelope has no index.age");
         }
 
-        if (archive.Methods.TryGetValue("index.age", out var method) && method != 0)
+        if (!archive.Methods.TryGetValue("index.age", out var method) || method != 0)
         {
             return Fail(DiagnosticCodes.E005EnvelopeInvalid, "index.age must be stored, not compressed", "index.age");
         }

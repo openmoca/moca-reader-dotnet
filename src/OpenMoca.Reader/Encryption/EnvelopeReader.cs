@@ -85,7 +85,8 @@ public static partial class MocaReader
 
         foreach (var name in new[] { PackageAge, IndexAge })
         {
-            if (files.TryGetValue(name, out var stored) && source.Methods.TryGetValue(stored, out var method) && method != Stored)
+            // An entry the raw central-directory parse did not find is refused, never assumed to be stored.
+            if (files.TryGetValue(name, out var stored) && (!source.Methods.TryGetValue(stored, out var method) || method != Stored))
             {
                 return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"{name} must be stored, not compressed", name);
             }
@@ -211,6 +212,9 @@ public static partial class MocaReader
     internal static async Task<(byte[]? Plain, string? Code, string? Message)> OpenAgeEntryAsync(
         byte[] bytes, string file, JsonObject? outline, ReadOptions options, CancellationToken cancellationToken)
     {
+        // Reader contract §3: the limit is an integer from 1 to 22; anything else is a host error.
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.Limits.MaxScryptWorkFactor, 1, "Limits.MaxScryptWorkFactor");
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Limits.MaxScryptWorkFactor, 22, "Limits.MaxScryptWorkFactor");
         var decryptor = options.EnvelopeDecryptor;
         if (decryptor is null)
         {
@@ -222,9 +226,9 @@ public static partial class MocaReader
         {
             header = decryptor.ParseHeader(bytes, options.Limits.MaxScryptWorkFactor);
         }
-        catch (EnvelopeDecryptionException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return (null, CodeOf(ex.Failure), $"{file}.age: {ex.Message}");
+            return Failure(ex, file, DiagnosticCodes.E006AgeHeaderInvalid);
         }
 
         if (options.KeyProvider is null)
@@ -244,7 +248,8 @@ public static partial class MocaReader
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return (null, DiagnosticCodes.E001EncryptedNoKey, $"the key provider failed: {ex.Message}");
+            // Encrypted packages §5.1: never the provider's own message, which may carry a token or an address.
+            return (null, DiagnosticCodes.E001EncryptedNoKey, $"the key provider failed ({ex.GetType().Name})");
         }
 
         if (key is null)
@@ -256,11 +261,18 @@ public static partial class MocaReader
         {
             return (decryptor.Decrypt(bytes, header, key, options.Limits.MaxBytes), null, null);
         }
-        catch (EnvelopeDecryptionException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return (null, CodeOf(ex.Failure), $"{file}.age: {ex.Message}");
+            return Failure(ex, file, DiagnosticCodes.E002DecryptionFailed);
         }
     }
+
+    // Encrypted packages §5.1: nothing from opening an envelope is thrown to the caller (cancellation aside). A
+    // decryptor's own failure maps to its code; anything else to the step's code, with its type name only.
+    private static (byte[]? Plain, string? Code, string? Message) Failure(Exception ex, string file, string fallback) =>
+        ex is EnvelopeDecryptionException known
+            ? (null, CodeOf(known.Failure), $"{file}.age: {known.Message}")
+            : (null, fallback, $"{file}.age: the decryptor failed ({ex.GetType().Name})");
 
     private static string CodeOf(EnvelopeFailure failure) => failure switch
     {
