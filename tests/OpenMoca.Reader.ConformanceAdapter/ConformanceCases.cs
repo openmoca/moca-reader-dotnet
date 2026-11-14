@@ -100,6 +100,7 @@ public static class ConformanceCases
             ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
             ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
             ["readingOrder"] = result.ReadingOrder,
+            ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
         };

@@ -125,6 +125,8 @@ public static class DiagnosticCodes
     // Library
     /// <summary>A library was given a second package with the same id and version but a different digest; the second is refused.</summary>
     public const string L001IdentityConflict = "L001_IDENTITY_CONFLICT";
+    /// <summary>A library was given a second issued copy of the same original. The second is not loaded.</summary>
+    public const string L002IssuedCopyDuplicate = "L002_ISSUED_COPY_DUPLICATE";
 
     // Profiles
     /// <summary>A declared profile is not recognised by this reader.</summary>
@@ -210,6 +212,7 @@ public static class DiagnosticCodes
         [R003MemberCycle] = DiagnosticSeverity.Error,
         [R004RelationUnauthorised] = DiagnosticSeverity.Info,
         [L001IdentityConflict] = DiagnosticSeverity.Error,
+        [L002IssuedCopyDuplicate] = DiagnosticSeverity.Info,
         [F001ProfileUnrecognised] = DiagnosticSeverity.Info,
         [O001OntologyUnparseable] = DiagnosticSeverity.Warning,
         [O002ConceptUndeclared] = DiagnosticSeverity.Warning,

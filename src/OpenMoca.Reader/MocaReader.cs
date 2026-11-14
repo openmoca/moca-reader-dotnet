@@ -219,6 +219,7 @@ public static partial class MocaReader
         var attestationFiles = bytes.Keys
             .Where(p => p.StartsWith(PackageDigest.AttestationsDirectory + "/", StringComparison.Ordinal) && AttestationFile().IsMatch(p))
             .Order(StringComparer.Ordinal);
+        var pending = new List<(string File, AttestationFormats.Parsed Parsed, string Role, AttestationRecord Record)>();
         foreach (var file in attestationFiles)
         {
             var (parsed, malformed) = AttestationFormats.Parse(file, bytes[file]);
@@ -230,41 +231,72 @@ public static partial class MocaReader
             }
 
             var type = JsonValues.StringOf(parsed.Statement["predicateType"]);
-            if (type is not (AttestationFormats.PredicatePackage or AttestationFormats.PredicateReview))
+            var role = type switch
+            {
+                AttestationFormats.PredicatePackage => "package",
+                AttestationFormats.PredicateReview => "review",
+                AttestationFormats.PredicateIssuedCopy => "issued-copy",
+                _ => null,
+            };
+            if (role is null)
             {
                 result.Attestations.Add(new AttestationRecord { File = file, PredicateType = type, Outcome = "ignored", Reason = "unknown predicate type" });
                 continue;
             }
 
-            var role = type == AttestationFormats.PredicatePackage ? "package" : "review";
-            var (outcome, signer, reason, ids, reviewers) = AttestationFormats.VerifySignatureWithScope(parsed, options.TrustRoot, role, now, options.SigstoreVerifier);
-            var record = new AttestationRecord
-            {
-                File = file,
-                PredicateType = type,
-                Role = role,
-                Format = parsed.Format,
-                Outcome = outcome,
-                Signer = signer,
-                Reason = reason,
-            };
+            var record = new AttestationRecord { File = file, PredicateType = type, Role = role, Format = parsed.Format, Outcome = "pending" };
             result.Attestations.Add(record);
-            switch (outcome)
+            pending.Add((file, parsed, role, record));
+        }
+
+        // Attestations §7.1, pass 1: issued-copy attestations, before the others.
+        var passed = new List<(AttestationRecord Record, string File, string Signer, IssuedCopyCheck Check)>();
+        foreach (var (file, parsed, role, record) in pending.Where(p => p.Role == "issued-copy"))
+        {
+            if (Signature(file, parsed, role, record, options, now, diagnostics) is not { } sig)
             {
-                case "unverifiable":
-                    diagnostics.Add(DiagnosticCodes.A003AttestationUnverifiable, $"{role} attestation not checked: {reason}", file);
-                    continue;
-                case "indeterminate":
-                    diagnostics.Add(DiagnosticCodes.A004AttestationIndeterminate, reason ?? "online verification could not complete", file);
-                    continue;
-                case "invalid":
-                    diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {reason}", file);
-                    continue;
+                continue;
             }
 
+            var check = IssuedCopies.Check(parsed.Statement, sig, result.Manifest!, result.Digest!, result.FileDigests, !diagnostics.Has(DiagnosticCodes.M002ManifestSchema));
+            if (check.Error is not null)
+            {
+                Invalid(record, file, $"issued-copy attestation: {check.Error}", diagnostics);
+                continue;
+            }
+
+            passed.Add((record, file, sig.Signer!, check));
+        }
+
+        IssuedCopyCheck? issued = null;
+        if (passed.Count > 0 && passed.All(p => IssuedCopies.Same(p.Check, passed[0].Check)))
+        {
+            issued = passed[0].Check;
+            result.IssuedCopy = new IssuedCopy(issued.Original!, [.. passed.Select(p => p.Signer)], [.. issued.Changed!.Keys.Order(StringComparer.Ordinal)]);
+        }
+        else
+        {
+            // Several that disagree are each A002, and none is used.
+            foreach (var p in passed)
+            {
+                Invalid(p.Record, p.File, "issued-copy attestations disagree on original or changedFiles; none is used", diagnostics);
+            }
+        }
+
+        // Pass 2: package attestations against the rebuilt original digest when there is an issued copy.
+        var digest = issued?.Original ?? result.Digest!;
+        foreach (var (file, parsed, role, record) in pending.Where(p => p.Role != "issued-copy"))
+        {
+            if (Signature(file, parsed, role, record, options, now, diagnostics) is not { } sig)
+            {
+                continue;
+            }
+
+            var signer = sig.Signer;
+            var reviewers = sig.Reviewers;
             if (role == "package")
             {
-                var mismatch = AttestationFormats.CheckPackageStatement(parsed.Statement, result.Id, result.Version, result.Digest!);
+                var mismatch = AttestationFormats.CheckPackageStatement(parsed.Statement, result.Id, result.Version, digest);
                 if (mismatch is not null)
                 {
                     record.Outcome = "invalid";
@@ -272,14 +304,14 @@ public static partial class MocaReader
                     // Attestations §3: a statement naming this id@version with another digest is positive evidence that
                     // the content changed after signing.
                     var subjects = parsed.Statement["subject"] as JsonArray;
-                    var tampered = subjects is { Count: 1 } && JsonValues.StringOf(subjects[0]?["name"]) == $"{result.Id}@{result.Version}";
+                    var tampered = subjects is { Count: 1 } && JsonValues.StringOf((subjects[0] as JsonObject)?["name"]) == $"{result.Id}@{result.Version}";
                     diagnostics.Add(tampered ? DiagnosticCodes.A008PackageDigestMismatch : DiagnosticCodes.A002AttestationInvalid,
                         $"package attestation does not match this package: {mismatch}", file);
                 }
                 else
                 {
                     result.Signers.Add(signer!);
-                    result.RelationScopes.AddRange(ids);
+                    result.RelationScopes.AddRange(sig.Ids);
                 }
 
                 continue;
@@ -313,22 +345,33 @@ public static partial class MocaReader
                 continue;
             }
 
+            // Attestations §7.1: in an issued copy, a review of the publisher's bytes of a changed file is listed with
+            // fileChanged and never counts; it is not outdated.
+            var subjectsByName = (parsed.Statement["subject"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(x => (Name: JsonValues.StringOf(x["name"]), Sha: JsonValues.StringOf((x["digest"] as JsonObject)?["sha256"])))
+                .ToList();
+            bool Changed(string path) =>
+                issued is not null
+                && issued.Changed!.TryGetValue(UnicodeText.Normalize(path, NormalizationForm.FormC), out var original)
+                && subjectsByName.Any(x => x.Name == path && x.Sha == original);
+            var fileChanged = review.Outdated.Where(Changed).ToList();
             record.Current = review.Current;
-            record.Outdated = review.Outdated;
-            foreach (var path in review.Outdated)
+            record.Outdated = [.. review.Outdated.Where(p => !Changed(p))];
+            foreach (var path in record.Outdated)
             {
                 diagnostics.Add(DiagnosticCodes.A006ReviewOutdated, $"review of {path} no longer matches the file", file);
             }
 
             var predicate = review.Predicate!;
-            foreach (var path in review.Current)
+            foreach (var path in review.Current.Concat(fileChanged))
             {
                 var entry = new AttestedReview(
                     JsonValues.StringOf(predicate["reviewer"]) ?? "",
                     JsonValues.StringOf(predicate["reviewedAt"]) ?? "",
                     JsonValues.StringOf(predicate["outcome"]) ?? "",
                     signer!,
-                    JsonValues.StringOf(predicate["scope"]));
+                    JsonValues.StringOf(predicate["scope"]),
+                    fileChanged.Contains(path) ? true : null);
                 var key = UnicodeText.Normalize(path, NormalizationForm.FormC);
                 if (!result.ReviewsByFile.TryGetValue(key, out var list))
                 {
@@ -355,6 +398,36 @@ public static partial class MocaReader
 
             result.ReviewsByFile[path] = [.. latest.Values];
         }
+    }
+
+    // Attestations §7 steps 6–7: the signature outcome, reported; the check when it is valid, else null.
+    private static SignatureCheck? Signature(string file, AttestationFormats.Parsed parsed, string role, AttestationRecord record, ReadOptions options, DateTimeOffset now, DiagnosticBag diagnostics)
+    {
+        var sig = AttestationFormats.CheckSignature(parsed, options.TrustRoot, role, now, options.SigstoreVerifier);
+        record.Outcome = sig.Outcome;
+        record.Signer = sig.Signer;
+        record.Reason = sig.Reason;
+        switch (sig.Outcome)
+        {
+            case "unverifiable":
+                diagnostics.Add(DiagnosticCodes.A003AttestationUnverifiable, $"{role} attestation not checked: {sig.Reason}", file);
+                return null;
+            case "indeterminate":
+                diagnostics.Add(DiagnosticCodes.A004AttestationIndeterminate, sig.Reason ?? "online verification could not complete", file);
+                return null;
+            case "invalid":
+                diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {sig.Reason}", file);
+                return null;
+            default:
+                return sig;
+        }
+    }
+
+    private static void Invalid(AttestationRecord record, string file, string reason, DiagnosticBag diagnostics)
+    {
+        record.Outcome = "invalid";
+        record.Reason = reason;
+        diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, reason, file);
     }
 
     // Package spec §7.2: supersedes and conflictsWith take effect only when a signer may speak for the target.
@@ -494,7 +567,13 @@ public static partial class MocaReader
                     capabilities.Add("localized");
                 }
 
-                if (result.ReviewsByFile.TryGetValue(rep.File, out var reviewsOfFile))
+                // Attestations §7.1: an issued copy whose issuer changed a reviewed file is not reviewed.
+                if (result.ReviewsByFile.TryGetValue(rep.File, out var allReviews) && allReviews.Any(r => r.FileChanged == true))
+                {
+                    allApproved = false;
+                }
+
+                if (result.ReviewsByFile.TryGetValue(rep.File, out var reviewsOfFile) && reviewsOfFile.Any(r => r.FileChanged != true))
                 {
                     reviewedFiles++;
                     if (Reviews.StatusOf(reviewsOfFile, result.Signers.Count > 0) != "approved")

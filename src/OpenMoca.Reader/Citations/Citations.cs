@@ -108,7 +108,8 @@ public static class Citations
         return new CitationRecord
         {
             Package = new CitationPackage(result.Id, result.Version, result.Digest ?? "", result.Signers.Count > 0,
-                result.Signers.Count > 0 ? [.. result.Signers] : null),
+                result.Signers.Count > 0 ? [.. result.Signers] : null,
+                result.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null),
             Node = new CitationNode
             {
                 Id = $"{result.Id}#{node.Path}",
@@ -120,6 +121,7 @@ public static class Citations
                 Description = Str(fm["description"]),
                 Tags = fm["tags"] is JsonArray tags ? tags.Select(Str).OfType<string>().ToList() : null,
                 Digest = rep.Sha256 is not null ? $"sha256:{rep.Sha256}" : null,
+                IssuedChange = result.IssuedCopy?.ChangedFiles.Contains(rep.File) == true ? true : null,
             },
             Span = new CitationSpan(rep.BodyOffset, rep.BodyOffset + Encoding.UTF8.GetByteCount(body)),
             Text = text,

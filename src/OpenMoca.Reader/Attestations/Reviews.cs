@@ -9,6 +9,8 @@ public static class Reviews
     /// </summary>
     public static string StatusOf(IReadOnlyCollection<AttestedReview>? reviews, bool signed)
     {
+        // Attestations §7.1: a review of a file an issuer changed never counts.
+        reviews = reviews?.Where(r => r.FileChanged != true).ToList();
         if (reviews is null || reviews.Count == 0)
         {
             return "none";

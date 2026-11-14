@@ -104,6 +104,12 @@ public sealed class PackageResult
     /// </summary>
     public string? ReadingOrder { get; internal set; }
 
+    /// <summary>
+    /// For an issued copy that passed verification (attestations §7.1): the original digest, the issuers and the
+    /// changed files. Null otherwise.
+    /// </summary>
+    public IssuedCopy? IssuedCopy { get; internal set; }
+
     /// <summary>The resolved reading order, for search (Reader contract §9).</summary>
     internal OpenMoca.Reader.Structure.ReadingOrder? ResolvedReadingOrder { get; set; }
 
@@ -134,3 +140,12 @@ public sealed class PackageResult
     /// </summary>
     public IReadOnlyDictionary<string, byte[]> FileBytes { get; internal set; } = new Dictionary<string, byte[]>();
 }
+
+/// <summary>An issued copy bound to its publisher's package (attestations §7.1).</summary>
+/// <param name="OriginalDigest">The publisher's digest, rebuilt from the copy. The same for every copy.</param>
+/// <param name="Issuers">The signers of the issued-copy attestations that passed, in file-name order.</param>
+/// <param name="ChangedFiles">The package paths the issuer changed, sorted.</param>
+public sealed record IssuedCopy(
+    [property: System.Text.Json.Serialization.JsonPropertyName("originalDigest")] string OriginalDigest,
+    [property: System.Text.Json.Serialization.JsonPropertyName("issuers")] IReadOnlyList<string> Issuers,
+    [property: System.Text.Json.Serialization.JsonPropertyName("changedFiles")] IReadOnlyList<string> ChangedFiles);

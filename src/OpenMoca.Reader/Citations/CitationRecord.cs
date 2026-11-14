@@ -67,7 +67,13 @@ public sealed record CitationPackage(
     [property: JsonPropertyName("version")] string Version,
     [property: JsonPropertyName("digest")] string Digest,
     [property: JsonPropertyName("signed")] bool Signed,
-    [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null);
+    [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null,
+    [property: JsonPropertyName("issuedCopy")] CitationIssuedCopy? IssuedCopy = null);
+
+/// <summary>An issued copy in a citation record (attestations §7.1): the original digest and the issuers.</summary>
+public sealed record CitationIssuedCopy(
+    [property: JsonPropertyName("originalDigest")] string OriginalDigest,
+    [property: JsonPropertyName("issuers")] IReadOnlyList<string> Issuers);
 
 /// <summary>The node part of a citation record.</summary>
 public sealed record CitationNode
@@ -107,6 +113,10 @@ public sealed record CitationNode
     /// <summary><c>sha256:</c> digest of the node file.</summary>
     [JsonPropertyName("digest")]
     public string? Digest { get; init; }
+
+    /// <summary>True when the record comes from a file the issuer of an issued copy changed (attestations §7.1).</summary>
+    [JsonPropertyName("issuedChange")]
+    public bool? IssuedChange { get; init; }
 }
 
 /// <summary>UTF-8 byte offsets into the node file.</summary>
@@ -187,10 +197,11 @@ public sealed record CitationReview(
     [property: JsonPropertyName("outcome")] string Outcome,
     [property: JsonPropertyName("signer")] string Signer,
     [property: JsonPropertyName("scope")] string? Scope = null,
-    [property: JsonPropertyName("packageVerified")] bool PackageVerified = false)
+    [property: JsonPropertyName("packageVerified")] bool PackageVerified = false,
+    [property: JsonPropertyName("fileChanged")] bool? FileChanged = null)
 {
     internal static CitationReview From(AttestedReview r, bool packageVerified) =>
-        new(r.Reviewer, r.ReviewedAt, r.Outcome, r.Signer, r.Scope, packageVerified);
+        new(r.Reviewer, r.ReviewedAt, r.Outcome, r.Signer, r.Scope, packageVerified, r.FileChanged);
 }
 
 /// <summary>One evidence entry: the source (as the node declares it), the selector, and whether it matched.</summary>

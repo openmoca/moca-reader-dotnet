@@ -41,6 +41,11 @@ public sealed partial record PackageState
     /// <summary>Each node file's <c>moca.contested_by</c>.</summary>
     [JsonPropertyName("contests")] public IReadOnlyDictionary<string, IReadOnlyList<string>> Contests { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
 
+    /// <summary>The package's issued copy, when it has one (attestations §7.1), so a store search recomputes it.</summary>
+    [JsonPropertyName("issuedCopy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IssuedCopy? IssuedCopy { get; init; }
+
     /// <summary>The package's reading order, when it resolves (package spec §4.10), so a store search applies upTo.</summary>
     [JsonPropertyName("readingOrder")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -71,6 +76,7 @@ public sealed partial record PackageState
             Reviews = result.ReviewsByFile.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<AttestedReview>)[.. kv.Value], StringComparer.Ordinal),
             Contests = contests,
             ReadingOrder = result.ResolvedReadingOrder,
+            IssuedCopy = result.IssuedCopy,
         };
     }
 
@@ -159,7 +165,14 @@ public sealed partial record PackageState
         var reviews = state.Reviews.GetValueOrDefault(file) ?? [];
         return record with
         {
-            Package = record.Package with { Signed = signed, Signers = signed ? [.. state.Signers] : null },
+            // Attestations §7.1: whether the copy is bound to its publisher depends on the trust root, so it comes from the state.
+            Package = record.Package with
+            {
+                Signed = signed,
+                Signers = signed ? [.. state.Signers] : null,
+                IssuedCopy = state.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null,
+            },
+            Node = record.Node with { IssuedChange = state.IssuedCopy?.ChangedFiles.Contains(file) == true ? true : null },
             Trust = trust with
             {
                 Stale = trust.StaleAfter is not null && staleAt is not null && now >= staleAt,
