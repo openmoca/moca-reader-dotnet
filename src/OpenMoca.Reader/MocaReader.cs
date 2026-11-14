@@ -119,6 +119,11 @@ public static partial class MocaReader
 
         result.Manifest = manifest;
         ManifestChecks.Check(manifest, diagnostics, options.KnownProfiles);
+        // Package spec §4.1: the publisher's intent, exposed and never acted on. Null when the manifest fails its schema.
+        if (!diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
+        {
+            result.Distribution = JsonValues.StringOf(manifest["distribution"]) ?? "open";
+        }
         result.Profiles = (manifest["profiles"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? [];
         // Package spec §14: M008 only for a declared mocaVersion below 0.4; M009 for one newer than this Reader's.
         var declared = MajorMinor().Match(JsonValues.StringOf(manifest["mocaVersion"]) ?? "");

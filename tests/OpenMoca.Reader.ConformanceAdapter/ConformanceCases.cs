@@ -82,6 +82,7 @@ public static class ConformanceCases
             ["codes"] = StructureJson.Strings(codes),
             ["capabilities"] = StructureJson.Strings(result.Capabilities),
             ["digest"] = result.Digest,
+            ["distribution"] = result.Distribution,
             ["evidenceMatched"] = evidenceMatched,
         };
         if (sidecarUsable is not null)

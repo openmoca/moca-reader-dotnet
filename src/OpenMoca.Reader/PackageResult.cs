@@ -69,6 +69,13 @@ public sealed class PackageResult
     /// <summary>Derived capabilities, sorted (package spec §11). Empty when the package is invalid.</summary>
     public IReadOnlyList<string> Capabilities { get; internal set; } = [];
 
+    /// <summary>
+    /// The publisher's intended distribution: <c>open</c>, <c>encrypted-only</c> or <c>service-only</c>; <c>open</c>
+    /// when the manifest has none, and null when the manifest is missing or fails its schema (package spec §4.1).
+    /// A label only: it never changes what the Reader does.
+    /// </summary>
+    public string? Distribution { get; internal set; }
+
     /// <summary>The source the package was read from.</summary>
     public IPackageSource? Source { get; internal set; }
 
