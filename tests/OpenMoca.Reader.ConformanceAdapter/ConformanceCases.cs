@@ -61,6 +61,14 @@ public static class ConformanceCases
         var result = await MocaReader.ReadPackageAsync(Path.Combine(root, Str(c["target"])!), readOptions, cancellationToken);
         var codes = result.Diagnostics.Select(d => d.Code).ToList();
         bool? sidecarUsable = null;
+        // Encrypted packages §6: the envelope's own index.age, through the same key provider.
+        if (o["envelopeSidecar"]?.GetValue<bool>() == true)
+        {
+            var bound = await SidecarBinder.BindEnvelopeAsync(Path.Combine(root, Str(c["target"])!), result, readOptions, cancellationToken);
+            codes.AddRange(bound.Diagnostics.Select(d => d.Code));
+            sidecarUsable = bound.Usable;
+        }
+
         if (Str(o["sidecar"]) is { } sidecar)
         {
             var bound = SidecarBinder.Bind(Path.Combine(root, sidecar), result);
