@@ -194,10 +194,12 @@ node tests/OpenMoca.Reader.Parity/parity.mjs
 2. Point the `MOCA_*_REF` pins in `.github/workflows/test.yml` at the release tags
    ([moca-spec docs/releasing.md](https://github.com/openmoca/moca-spec/blob/main/docs/releasing.md#moving-the-pins)).
 3. The tests pass.
-4. Tag `vX.Y.Z` and publish a GitHub release whose notes are the changelog
-   section.
-5. `dotnet pack -c Release` from the tagged commit, and publish the four
-   packages to NuGet: `OpenMoca.Reader` first, then its bindings.
+4. Merge to main, tag `vX.Y.Z` on main and push the tag. The release workflow
+   (`.github/workflows/release.yml`) checks that the tag matches the version,
+   packs every package in `src/`, and publishes them to NuGet through trusted
+   publishing: `OpenMoca.Reader` first, then the packages that depend on it.
+   No NuGet API key is kept anywhere.
+5. Publish a GitHub release whose notes are the changelog section.
 
 ## Licence
 
