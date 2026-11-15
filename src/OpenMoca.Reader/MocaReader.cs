@@ -20,7 +20,7 @@ namespace OpenMoca.Reader;
 public static partial class MocaReader
 {
     /// <summary>The specification version this Reader implements, <c>major.minor</c> (package spec §14).</summary>
-    public const string MocaVersion = "0.6";
+    public const string MocaVersion = "0.7";
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 

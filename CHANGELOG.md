@@ -3,7 +3,7 @@
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
-## [Unreleased]
+## [0.7.0] - 2026-11-15
 
 For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5) and
 [moca-spec#7](https://github.com/openmoca/moca-spec/issues/7) and

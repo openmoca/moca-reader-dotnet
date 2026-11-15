@@ -55,7 +55,7 @@ asks:
 | | |
 | --- | --- |
 | Class | Reader |
-| Contract version | 0.6.0 |
+| Contract version | 0.7.0 |
 | Implemented | Archives, host sources, DSSE attestations, sidecars (lexical and dense), the ontology profile |
 | Encryption | With the `OpenMoca.Reader.Age` package (`ReadOptions.EnvelopeDecryptor = AgeEnvelopeDecryptor.Instance`, plus a `KeyProvider`). Without it, an envelope is recognised and reported with `E001`, and nothing inside it is exposed. Decrypted bytes stay in memory |
 | Sigstore | Offline only, with the `OpenMoca.Reader.Sigstore` package (`ReadOptions.SigstoreVerifier = new SigstoreVerifier()`), against the trust root's `sigstore.trustedRoot`. Without the package, or without a trusted root, a `*.sigstore.json` attestation is unverifiable (`A003`). There is no online mode: refresh the trusted root yourself (moca-spec attestations §6) |

@@ -33,9 +33,9 @@ public sealed class ConformanceCorpusTests
     }
 
     [Fact]
-    public void Corpus_WhenLoaded_IsVersion06()
+    public void Corpus_WhenLoaded_IsVersion07()
     {
-        Assert.Matches(@"^0\.6\.", Corpus.Value["corpusVersion"]!.GetValue<string>());
+        Assert.Matches(@"^0\.7\.", Corpus.Value["corpusVersion"]!.GetValue<string>());
     }
 
     [Theory]

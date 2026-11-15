@@ -20,8 +20,8 @@ procedure. It is signed, one node has a signed review, and the refund policy
 quotes the customer terms it came from, which travel inside the package.
 
 ```sh
-curl -fsSLO https://github.com/openmoca/moca-spec/releases/download/v0.6.0/support-kb.moca
-curl -fsSLO https://github.com/openmoca/moca-spec/releases/download/v0.6.0/example-trust-root.json
+curl -fsSLO https://github.com/openmoca/moca-spec/releases/download/v0.7.0/support-kb.moca
+curl -fsSLO https://github.com/openmoca/moca-spec/releases/download/v0.7.0/example-trust-root.json
 ```
 
 The trust root says whose signatures you accept, and for what. This one trusts
@@ -124,8 +124,8 @@ adapter:
 
 ```sh
 cd ..
-git clone --depth 1 --branch v0.6.0 https://github.com/openmoca/moca-spec.git
-git clone --depth 1 --branch v0.6.0 https://github.com/openmoca/moca-reader-dotnet.git
+git clone --depth 1 --branch v0.7.0 https://github.com/openmoca/moca-spec.git
+git clone --depth 1 --branch v0.7.0 https://github.com/openmoca/moca-reader-dotnet.git
 dotnet build moca-reader-dotnet/tests/OpenMoca.Reader.ConformanceAdapter -c Release
 cd moca-spec
 npm ci
