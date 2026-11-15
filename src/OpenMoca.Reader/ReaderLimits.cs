@@ -42,8 +42,23 @@ public sealed record ReaderLimits
     /// <summary>Members resolved in one read, at every depth; further members are not resolved (package spec §7.1, contract §3).</summary>
     public int MaxMembers { get; init; } = 256;
 
-    /// <summary>The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt (encrypted packages §4).</summary>
-    public int MaxScryptWorkFactor { get; init; } = 20;
+    /// <summary>
+    /// The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt
+    /// (encrypted packages §4). An integer from 1 to 22: anything else throws <see cref="ArgumentOutOfRangeException"/>
+    /// when the limits are made, before any read starts (Reader contract §3).
+    /// </summary>
+    public int MaxScryptWorkFactor
+    {
+        get => maxScryptWorkFactor;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1, nameof(MaxScryptWorkFactor));
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, 22, nameof(MaxScryptWorkFactor));
+            maxScryptWorkFactor = value;
+        }
+    }
+
+    private readonly int maxScryptWorkFactor = 20;
 
     /// <summary>The bytes of one manifest image (M010), or of an envelope's cover copy (E005) (package spec §4.6, contract §3).</summary>
     public int MaxImageBytes { get; init; } = 1024 * 1024;

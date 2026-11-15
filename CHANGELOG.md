@@ -12,10 +12,14 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
 
 ### Changed (encrypted packages: hardening)
 
-- Opening an envelope never throws to the caller (only cancellation does): an
-  unexpected failure is `E006` while parsing the header and `E002` after.
+- Opening an envelope never throws to the caller: an unexpected failure is
+  `E006` while parsing the header and `E002` after. Only the host's own
+  cancellation escapes, decided by the host's token: an
+  `OperationCanceledException` from a key provider or decryptor (its own
+  timeout) is a failure like any other.
 - `ReaderLimits.MaxScryptWorkFactor` must be from 1 to 22
-  (`ArgumentOutOfRangeException` otherwise); `AgeDecryptor.ParseHeader`
+  (`ArgumentOutOfRangeException` when the limits are made, before any read);
+  `AgeDecryptor.ParseHeader`
   refuses any other value too, so the work-factor shift cannot overflow.
 - `AgeDecryptor.FindFileKey` tries a key's kinds in order (identities,
   passphrase, file key) and verifies the header MAC for each; a null identity

@@ -212,7 +212,7 @@ public static partial class MocaReader
     internal static async Task<(byte[]? Plain, string? Code, string? Message)> OpenAgeEntryAsync(
         byte[] bytes, string file, JsonObject? outline, ReadOptions options, CancellationToken cancellationToken)
     {
-        // Reader contract §3: the limit is an integer from 1 to 22; anything else is a host error.
+        // Reader contract §3: the limit is an integer from 1 to 22; ReaderLimits refuses anything else when it is made.
         ArgumentOutOfRangeException.ThrowIfLessThan(options.Limits.MaxScryptWorkFactor, 1, "Limits.MaxScryptWorkFactor");
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Limits.MaxScryptWorkFactor, 22, "Limits.MaxScryptWorkFactor");
         var decryptor = options.EnvelopeDecryptor;
@@ -226,7 +226,7 @@ public static partial class MocaReader
         {
             header = decryptor.ParseHeader(bytes, options.Limits.MaxScryptWorkFactor);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!IsHostCancellation(ex, cancellationToken))
         {
             return Failure(ex, file, DiagnosticCodes.E006AgeHeaderInvalid);
         }
@@ -246,7 +246,7 @@ public static partial class MocaReader
                 file);
             key = await options.KeyProvider(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!IsHostCancellation(ex, cancellationToken))
         {
             // Encrypted packages §5.1: never the provider's own message, which may carry a token or an address.
             return (null, DiagnosticCodes.E001EncryptedNoKey, $"the key provider failed ({ex.GetType().Name})");
@@ -261,11 +261,16 @@ public static partial class MocaReader
         {
             return (decryptor.Decrypt(bytes, header, key, options.Limits.MaxBytes), null, null);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!IsHostCancellation(ex, cancellationToken))
         {
             return Failure(ex, file, DiagnosticCodes.E002DecryptionFailed);
         }
     }
+
+    // Encrypted packages §5.1: only cancellation by the host escapes, decided by the host's own token. A provider's
+    // or decryptor's own OperationCanceledException (its timeout, say) is a failure like any other.
+    private static bool IsHostCancellation(Exception ex, CancellationToken cancellationToken) =>
+        ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
 
     // Encrypted packages §5.1: nothing from opening an envelope is thrown to the caller (cancellation aside). A
     // decryptor's own failure maps to its code; anything else to the step's code, with its type name only.

@@ -176,13 +176,54 @@ public sealed partial class EnvelopeTests
     }
 
     [Fact]
-    public async Task WorkFactorLimitOutside1To22_IsAHostError()
+    public void WorkFactorLimitOutside1To22_IsAHostError_WhenTheLimitsAreMade()
     {
-        foreach (var bad in new[] { 0, 23, 40 })
+        // Refused before any read starts, so no read, of an envelope or not, ever sees it.
+        foreach (var bad in new[] { 0, 23, 40, int.MinValue })
         {
-            var options = WithKey(TestKey) with { Limits = ReaderLimits.Default with { MaxScryptWorkFactor = bad } };
-            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken));
+            Assert.Throws<ArgumentOutOfRangeException>(() => ReaderLimits.Default with { MaxScryptWorkFactor = bad });
+            Assert.Throws<ArgumentOutOfRangeException>(() => new ReaderLimits { MaxScryptWorkFactor = bad });
         }
+
+        Assert.Equal(20, ReaderLimits.Default.MaxScryptWorkFactor);
+        Assert.Equal(22, (ReaderLimits.Default with { MaxScryptWorkFactor = 22 }).MaxScryptWorkFactor);
+    }
+
+    private sealed class CancellingDecryptor(bool inParse) : IEnvelopeDecryptor
+    {
+        public IEnvelopeHeader ParseHeader(byte[] file, int maxScryptWorkFactor) =>
+            inParse ? throw new TaskCanceledException("its own timeout") : AgeEnvelopeDecryptor.Instance.ParseHeader(file, maxScryptWorkFactor);
+
+        public byte[] Decrypt(byte[] file, IEnvelopeHeader header, EnvelopeKey key, long maxBytes) => throw new OperationCanceledException("its own timeout");
+    }
+
+    [Fact]
+    public async Task ACancellationTheHostDidNotAskFor_IsAFailure_NotThrown()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var provider = WithKey(TestKey) with { KeyProvider = (_, _) => throw new TaskCanceledException("the vault timed out") };
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), provider, ct);
+        Assert.Equal([DiagnosticCodes.E001EncryptedNoKey], r.Diagnostics.Select(d => d.Code));
+        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(true) }, ct);
+        Assert.Equal([DiagnosticCodes.E006AgeHeaderInvalid], parse.Diagnostics.Select(d => d.Code));
+        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(false) }, ct);
+        Assert.Equal([DiagnosticCodes.E002DecryptionFailed], later.Diagnostics.Select(d => d.Code));
+    }
+
+    [Fact]
+    public async Task TheHostCancelling_StillCancels()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var options = WithKey(TestKey) with
+        {
+            KeyProvider = (_, token) =>
+            {
+                cts.Cancel();
+                token.ThrowIfCancellationRequested();
+                return ValueTask.FromResult<EnvelopeKey?>(null);
+            },
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, cts.Token));
     }
 
     /// <summary>
