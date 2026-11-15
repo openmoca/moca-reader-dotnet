@@ -178,7 +178,7 @@ public sealed class StructureIndex
     }
 
     /// <summary>
-    /// Citation records of the nodes bound to <paramref name="iri"/> and, with <paramref name="include"/>
+    /// Citation records of the nodes bound to <paramref name="iri"/>, by their own concepts or by composition, and, with <paramref name="include"/>
     /// of narrower, parts or both, to its descendants. The default retrieval policy applies unless
     /// <paramref name="includeAll"/>. Ordered by <c>node.ref</c>.
     /// </summary>
@@ -212,8 +212,12 @@ public sealed class StructureIndex
             }
         }
 
+        // Package spec §5.6: a record is bound by its node's own concepts and by composition, as for search.
+        var composition = Composition.Index(_library.Packages
+            .Where(p => p.Result.Digest is not null)
+            .Select(p => (p.Result.Digest!, (IReadOnlyList<CompositionBinding>?)Composition.Of(p.Result))));
         return _library.Citations(locale, includeText: true)
-            .Where(r => (r.Concepts ?? []).Any(wanted.Contains))
+            .Where(r => Composition.BoundConcepts(r, composition).Any(wanted.Contains))
             .Where(r => includeAll || Citations.Citations.PassesDefaultPolicy(r))
             .OrderBy(r => r.Node.Ref, StringComparer.Ordinal)
             .ToList();
