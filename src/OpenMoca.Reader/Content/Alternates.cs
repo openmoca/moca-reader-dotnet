@@ -72,9 +72,10 @@ public static class Alternates
             return null;
         }
 
+        // A range with no end runs to the end of its stretch on the reference.
         if (double.IsPositiveInfinity(range.End))
         {
-            return (range.Start - offset, double.PositiveInfinity);
+            return (range.Start - offset, s.To);
         }
 
         return range.End <= s.Hi ? (range.Start - offset, range.End - offset) : null;

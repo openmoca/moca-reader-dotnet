@@ -540,7 +540,11 @@ internal static partial class ContentReader
                     // §5.7: an alternate with no transcript of its own is checked through its reference.
                     path = refTranscript;
                     duration = reference.Duration;
-                    toReference = range => Alternates.RangeToReference(sync, range);
+                    // An alternate's own duration bounds the range too, when it declares one.
+                    var own = cited.Duration;
+                    toReference = range => own is { } limit && !double.IsPositiveInfinity(range.End) && range.End > limit
+                        ? null
+                        : Alternates.RangeToReference(sync, range);
                 }
             }
             else if (path is not null && EvidenceText.KindOf(path) == SourceKind.WebVtt)

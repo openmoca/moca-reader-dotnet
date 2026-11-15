@@ -112,6 +112,13 @@ internal static partial class CoreSchemaYaml
     [GeneratedRegex(@"^\.(?:nan|NaN|NAN)\z")]
     private static partial Regex NanPattern();
 
+    /// <summary>
+    /// Package spec §5.1: JSON has no infinity or NaN, so .inf, .nan and numbers too large to be finite are kept as a
+    /// marker that is neither a number nor a string: the schemas fail it wherever they want either (C005), and nothing
+    /// reads it as an id, a duration or any other value.
+    /// </summary>
+    private static JsonObject NonFinite(string text) => new() { ["$nonFinite"] = text };
+
     public static JsonNode? Parse(string yaml)
     {
         var parser = new Parser(new StringReader(yaml));
@@ -227,13 +234,13 @@ internal static partial class CoreSchemaYaml
 
         if (FloatPattern().IsMatch(value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
         {
-            return JsonValue.Create(number);
+            // Package spec §5.1: a number too large to be finite, such as 1e400, is read as .inf is.
+            return double.IsFinite(number) ? JsonValue.Create(number) : NonFinite(value);
         }
 
-        // JSON has no infinity or NaN; keep them as their text rather than failing the node.
         if (InfPattern().IsMatch(value) || NanPattern().IsMatch(value))
         {
-            return JsonValue.Create(value);
+            return NonFinite(value);
         }
 
         return JsonValue.Create(value);

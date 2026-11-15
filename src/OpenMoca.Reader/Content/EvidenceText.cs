@@ -356,24 +356,100 @@ public static partial class EvidenceText
         return sb.ToString();
     }
 
+    /// <summary>Every start index of <paramref name="needle"/> in <paramref name="text"/>, overlapping ones included,
+    /// in one linear pass (Knuth-Morris-Pratt).</summary>
+    public static List<int> Occurrences(string text, string needle)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(needle);
+        var output = new List<int>();
+        var m = needle.Length;
+        if (m == 0)
+        {
+            return output;
+        }
+
+        var fail = new int[m];
+        for (int i = 1, k = 0; i < m; i++)
+        {
+            while (k > 0 && needle[i] != needle[k])
+            {
+                k = fail[k - 1];
+            }
+
+            if (needle[i] == needle[k])
+            {
+                k++;
+            }
+
+            fail[i] = k;
+        }
+
+        for (int i = 0, k = 0; i < text.Length; i++)
+        {
+            while (k > 0 && text[i] != needle[k])
+            {
+                k = fail[k - 1];
+            }
+
+            if (text[i] == needle[k])
+            {
+                k++;
+            }
+
+            if (k == m)
+            {
+                output.Add(i - m + 1);
+                k = fail[k - 1];
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>A range-minimum (or maximum) table: a query over values[lo..hi] in O(1).</summary>
+    private static Func<int, int, double> SparseTable(double[] values, Func<double, double, double> pick)
+    {
+        var levels = new List<double[]> { values };
+        for (var w = 1; 2 * w <= values.Length; w *= 2)
+        {
+            var prev = levels[^1];
+            var next = new double[prev.Length - w];
+            for (var i = 0; i < next.Length; i++)
+            {
+                next[i] = pick(prev[i], prev[i + w]);
+            }
+
+            levels.Add(next);
+        }
+
+        return (lo, hi) =>
+        {
+            var k = System.Numerics.BitOperations.Log2((uint)(hi - lo + 1));
+            return pick(levels[k][lo], levels[k][hi - (1 << k) + 1]);
+        };
+    }
+
     /// <summary>
     /// Contract §7: where a refining quote is spoken in a time range. The covered text is the payloads of the cues the
-    /// range overlaps, in file order, joined with LF, with each run of white space as one space (the quote's parts
-    /// too). Of every occurrence, the one whose cues span the shortest time wins, the earliest on a tie.
+    /// range overlaps, in file order, joined with LF, with each run of white space (the five ASCII characters) as one
+    /// space, the quote's parts too. A cue is touched when a non-space character of <c>exact</c> comes from it. Of
+    /// every occurrence, the one whose touched cues span the shortest time wins, the earliest on a tie. Contract §3:
+    /// linear in the covered text and the quote.
     /// </summary>
-    /// <returns>From the start of the first cue the quote's text is in to the end of the last; null when the quote is
-    /// not in the covered text.</returns>
+    /// <returns>The earliest start and the latest end of the touched cues; null when the quote is not in the covered
+    /// text.</returns>
     public static (double Start, double End)? LocateQuote(IReadOnlyList<VttCue> cues, (double Start, double End) range, JsonObject quote)
     {
         ArgumentNullException.ThrowIfNull(cues);
         ArgumentNullException.ThrowIfNull(quote);
-        if (JsonValues.StringOf(quote["exact"]) is null)
+        if (JsonValues.StringOf(quote["exact"]) is not { } rawExact)
         {
             return null;
         }
 
-        var exact = CollapseSpaces(JsonValues.StringOf(quote["exact"])!);
-        if (exact.Trim(' ').Length == 0)
+        var exact = CollapseSpaces(rawExact);
+        if (exact.All(IsQuoteSpace))
         {
             return null;
         }
@@ -405,19 +481,54 @@ public static partial class EvidenceText
             }
         }
 
-        var haystack = text.ToString();
-        (double Start, double End)? best = null;
-        for (var at = haystack.IndexOf(needle, StringComparison.Ordinal); at >= 0; at = haystack.IndexOf(needle, at + 1, StringComparison.Ordinal))
+        var n = owner.Count;
+        // The owner of the first non-space character at or after each position, and of the last at or before it.
+        var next = new int[n + 1];
+        next[n] = -1;
+        for (var i = n - 1; i >= 0; i--)
         {
-            var own = owner.Skip(at + prefix.Length).Take(exact.Length).Where(o => o >= 0).ToList();
-            if (own.Count == 0)
+            next[i] = owner[i] >= 0 ? owner[i] : next[i + 1];
+        }
+
+        var prev = new int[n];
+        for (var i = 0; i < n; i++)
+        {
+            prev[i] = owner[i] >= 0 ? owner[i] : i > 0 ? prev[i - 1] : -1;
+        }
+
+        // Cues with text, in order: the touched cues of a span are those between its first and last owner.
+        var rank = Enumerable.Repeat(-1, covered.Count).ToArray();
+        var filled = new List<int>();
+        foreach (var o in owner)
+        {
+            if (o >= 0 && rank[o] < 0)
+            {
+                rank[o] = filled.Count;
+                filled.Add(o);
+            }
+        }
+
+        if (filled.Count == 0)
+        {
+            return null;
+        }
+
+        var earliest = SparseTable([.. filled.Select(c => covered[c].Start)], Math.Min);
+        var latest = SparseTable([.. filled.Select(c => covered[c].End)], Math.Max);
+        (double Start, double End)? best = null;
+        foreach (var at in Occurrences(text.ToString(), needle))
+        {
+            var a = at + prefix.Length;
+            var b = a + exact.Length;
+            var (first, last) = (next[a], prev[b - 1]);
+            if (first < 0 || last < 0 || rank[first] > rank[last])
             {
                 continue;
             }
 
-            (double Start, double End) span = (covered[own[0]].Start, covered[own[^1]].End);
-            if (best is not { } b || span.End - span.Start < b.End - b.Start
-                || (span.End - span.Start == b.End - b.Start && span.Start < b.Start))
+            (double Start, double End) span = (earliest(rank[first], rank[last]), latest(rank[first], rank[last]));
+            if (best is not { } bs || span.End - span.Start < bs.End - bs.Start
+                || (span.End - span.Start == bs.End - bs.Start && span.Start < bs.Start))
             {
                 best = span;
             }

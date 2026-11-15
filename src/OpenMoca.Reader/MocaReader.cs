@@ -467,6 +467,7 @@ public static partial class MocaReader
     {
         // Cycles are detected by id@version: composing another version of the same package is not a cycle.
         var self = $"{result.Id}@{result.Version}";
+        var listed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var member in members)
         {
             var memberId = JsonValues.StringOf(member["id"]);
@@ -480,6 +481,12 @@ public static partial class MocaReader
             var entry = new PackageMember { Reference = reference };
             result.Members.Add(entry);
             if (options.ResolveMember is null)
+            {
+                continue;
+            }
+
+            // Contract §3: a repeat of a member id (M005) is not resolved.
+            if (!listed.Add(memberId))
             {
                 continue;
             }
@@ -500,7 +507,7 @@ public static partial class MocaReader
             }
 
             // Contract §3: a pin met again in the same read shares the first read's result and counts once.
-            var pin = $"{memberId}@{reference.Version}#{digest}";
+            var pin = (memberId, reference.Version, digest);
             if (!budget.Members.TryGetValue(pin, out var child))
             {
                 if (budget.Resolved >= options.Limits.MaxMembers)
@@ -649,7 +656,7 @@ public static partial class MocaReader
 
         public long Bytes { get; set; }
 
-        public Dictionary<string, PackageResult?> Members { get; } = new(StringComparer.Ordinal);
+        public Dictionary<(string Id, string? Version, string Digest), PackageResult?> Members { get; } = [];
     }
 
     /// <summary>Compares a matched <c>major.minor</c> with a version string, numerically and without overflow.</summary>

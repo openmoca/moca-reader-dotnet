@@ -153,6 +153,43 @@ public sealed class BudgetTests : IDisposable
         Assert.True(allocated < 2L * 1024 * 1024 * 1024, $"allocated {allocated / 1048576} MiB");
     }
 
+    [Fact]
+    public void ARefinedQuoteOverA4MiBTranscript_IsLocatedInLinearTime()
+    {
+        // 4,096 cues of 1 KiB each: "a a a ...". Quadratic searches took minutes here.
+        var text = string.Concat(Enumerable.Repeat("a ", 512));
+        var cues = Enumerable.Range(0, 4096).Select(i => new OpenMoca.Reader.Content.VttCue(i, i + 1, text)).ToList();
+        foreach (var exact in new[] { "a", string.Concat(Enumerable.Repeat("a ", 4096)).Trim() })
+        {
+            var watch = Stopwatch.StartNew();
+            var located = OpenMoca.Reader.Content.EvidenceText.LocateQuote(cues, (0, 4096), new System.Text.Json.Nodes.JsonObject { ["type"] = "TextQuoteSelector", ["exact"] = exact });
+            watch.Stop();
+            Assert.NotNull(located);
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{exact.Length}-character quote located in {watch.Elapsed}");
+        }
+    }
+
+    [Fact]
+    public async Task ARepeatOfAMemberId_IsNotResolved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var leaf = Package("pkgs/leaf", new { id = $"{Id}/leaf", title = "Leaf" }, new Dictionary<string, string> { ["content/a.md"] = Node("Leaf") });
+        var digest = (await MocaReader.ReadPackageAsync(leaf, cancellationToken: ct)).Digest!;
+        var pins = new List<string> { Pin($"{Id}/leaf", digest) };
+        pins.AddRange(Enumerable.Range(0, 20).Select(i => Pin($"{Id}/leaf", "sha256:" + i.ToString(System.Globalization.CultureInfo.InvariantCulture).PadLeft(64, '0'))));
+        var top = Package("top", new { id = $"{Id}/top", title = "Top", members = Members(pins) }, []);
+        var calls = 0;
+        Func<MemberReference, CancellationToken, ValueTask<PackageTarget?>> resolve = (_, _) =>
+        {
+            calls++;
+            return ValueTask.FromResult<PackageTarget?>(leaf);
+        };
+
+        var result = await MocaReader.ReadPackageAsync(top, new ReadOptions { ResolveMember = resolve }, ct);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.M005DuplicateMember);
+        Assert.Equal(1, calls); // only the first entry for the id is resolved
+    }
+
     private static string Node(string title) => $"---\ntype: Note\ntitle: {title}\n---\n# {title}\n";
 
     private static string Pin(string id, string digest) => JsonSerializer.Serialize(new { id, version = "1.0.0", digest });
