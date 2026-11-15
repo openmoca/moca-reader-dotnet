@@ -55,7 +55,7 @@ public static class DiagnosticCodes
     // Content (OKF bundle rules plus MOCA extensions)
     /// <summary>A concept document has no YAML frontmatter (OKF MUST).</summary>
     public const string C001FrontmatterMissing = "C001_FRONTMATTER_MISSING";
-    /// <summary>Frontmatter is not parseable YAML or is not a mapping.</summary>
+    /// <summary>Frontmatter is not parseable YAML, is not a mapping, repeats a key, uses an alias, or lists two sources with one <c>id</c>.</summary>
     public const string C002FrontmatterInvalid = "C002_FRONTMATTER_INVALID";
     /// <summary>Frontmatter has no non-empty type (OKF MUST).</summary>
     public const string C003TypeMissing = "C003_TYPE_MISSING";

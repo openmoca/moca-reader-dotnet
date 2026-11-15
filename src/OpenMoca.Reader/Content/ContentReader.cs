@@ -99,6 +99,14 @@ internal static partial class ContentReader
             }
 
             var frontmatter = split.Data;
+
+            // Package spec §5.1: evidence and media name a source by its id, so two sources with one id leave none chosen.
+            if (RepeatedSourceId(frontmatter) is { } repeated)
+            {
+                diagnostics.Add(DiagnosticCodes.C002FrontmatterInvalid, $"sources has two entries with the id \"{repeated}\"; none is chosen", file);
+                continue;
+            }
+
             var type = JsonValues.StringOf(frontmatter["type"]);
             if (type is null || UnicodeText.JsTrim(type).Length == 0)
             {
@@ -233,6 +241,31 @@ internal static partial class ContentReader
         }
 
         return sources;
+    }
+
+    /// <summary>The first source id that two entries of the frontmatter's <c>sources</c> share, or null.</summary>
+    private static string? RepeatedSourceId(JsonObject frontmatter)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (frontmatter["sources"] is not JsonArray sources)
+        {
+            return null;
+        }
+
+        foreach (var entry in sources)
+        {
+            if (entry is not JsonObject source || JsonValues.StringOf(source["id"]) is not { } id)
+            {
+                continue;
+            }
+
+            if (!seen.Add(id))
+            {
+                return id;
+            }
+        }
+
+        return null;
     }
 
     private static void CheckEvidenceSources(string file, JsonObject frontmatter, DiagnosticBag diagnostics)
