@@ -236,7 +236,18 @@ public sealed record CitationEvidence(
     [property: JsonPropertyName("source")] JsonObject Source,
     [property: JsonPropertyName("selector")] JsonObject? Selector = null,
     [property: JsonPropertyName("note")] string? Note = null,
-    [property: JsonPropertyName("matched")] bool? Matched = null);
+    [property: JsonPropertyName("matched")] bool? Matched = null)
+{
+    /// <summary>For a time range refined by a quote that matched: where the quote is spoken (Reader contract §7).</summary>
+    [JsonPropertyName("located")]
+    public EvidenceLocation? Located { get; init; }
+}
+
+/// <summary>Seconds on the cited source's timeline, from the start of the first cue a refined quote is in to the end
+/// of the last (Reader contract §7).</summary>
+public sealed record EvidenceLocation(
+    [property: JsonPropertyName("start")] double Start,
+    [property: JsonPropertyName("end")] double End);
 
 /// <summary>How a search found a record: <c>search</c>, or a structure relation followed by a hook.</summary>
 public sealed record CitationRetrieval(

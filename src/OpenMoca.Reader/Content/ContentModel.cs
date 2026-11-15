@@ -5,7 +5,9 @@ namespace OpenMoca.Reader.Content;
 /// <summary>The outcome of checking one <c>moca.evidence</c> entry.</summary>
 /// <param name="Local">The source is a file under <c>sources/</c> or <c>media/</c> inside the package.</param>
 /// <param name="Matched">Set only when the selector was checked against that file.</param>
-public sealed record EvidenceCheck(bool Local, bool? Matched = null);
+/// <param name="Located">For a time range refined by a quote that matched: where the quote is spoken, in seconds on
+/// the cited source's timeline (Reader contract §7).</param>
+public sealed record EvidenceCheck(bool Local, bool? Matched = null, (double Start, double End)? Located = null);
 
 /// <summary>Package spec §5.7: one valid media description, with its source's resource as written.</summary>
 public sealed record MediaDescription(string Source, string Resource, string Type, double? Duration, string? Digest, string? Transcript)

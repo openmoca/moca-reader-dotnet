@@ -1,3 +1,4 @@
+using OpenMoca.Reader.Attestations;
 using OpenMoca.Reader.Json;
 using System.Text;
 using OpenMoca.Reader.Citations;
@@ -16,6 +17,7 @@ public sealed class MocaSearch
 {
     private const int MaxFetch = 200;
 
+    private readonly bool _allowUnsigned;
     private readonly Library? _library;
     private readonly HashSet<string>? _allowed;
     private readonly Dictionary<string, PackageState>? _states;
@@ -31,6 +33,7 @@ public sealed class MocaSearch
     public MocaSearch(Library library, ISearchBackend backend, IReadOnlyList<string>? audiences = null, SearchHooks? hooks = null, int overfetch = 3)
     {
         _library = library;
+        _allowUnsigned = library.AllowUnsignedRelations;
         _clock = library.Clock;
         _backend = backend;
         _audiences = audiences?.ToList();
@@ -49,6 +52,7 @@ public sealed class MocaSearch
         _states = packages.ToDictionary(p => p.Digest, StringComparer.Ordinal);
         _allowed = [.. _states.Keys];
         _storeIndex = PackageState.RelationIndexOf([.. _states.Values], allowUnsignedRelations);
+        _allowUnsigned = allowUnsignedRelations;
         _clock = clock;
         _backend = backend;
         _audiences = audiences?.ToList();
@@ -190,6 +194,13 @@ public sealed class MocaSearch
         // concepts it binds it to: none of them, or their ancestors, may come after upTo.
         foreach (var composer in composition.ComposersOf(record.Package.Digest))
         {
+            // Contract §9, Members: a composer limits a member only when its signers speak for the member (as for
+            // relations, R004), or the host allows unsigned packages to.
+            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded), record.Package.Id))
+            {
+                continue;
+            }
+
             if (!late.TryGetValue(composer.Digest, out var entry))
             {
                 var order = ReadingOrderOf(composer.Digest, loaded);
@@ -212,6 +223,11 @@ public sealed class MocaSearch
 
         return true;
     }
+
+    private IReadOnlyList<string> RelationScopesOf(string digest, Dictionary<string, PackageResult> loaded) =>
+        _library is not null
+            ? loaded.GetValueOrDefault(digest)?.RelationScopes ?? []
+            : _states!.GetValueOrDefault(digest)?.RelationScopes ?? [];
 
     private ReadingOrder? ReadingOrderOf(string digest, Dictionary<string, PackageResult> loaded) =>
         _library is not null

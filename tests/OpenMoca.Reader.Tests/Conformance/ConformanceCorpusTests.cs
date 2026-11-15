@@ -99,6 +99,17 @@ public sealed class ConformanceCorpusTests
             }
         }
 
+        // Contract §7: where a refined quote is spoken; numbers compared as JSON text, so 10 and 10.0 agree.
+        foreach (var (path, want) in e["evidenceLocated"] as JsonObject ?? [])
+        {
+            var got = actual["evidenceLocated"]?[path];
+            var gotText = got is null ? "null" : JsonNode.Parse(got.ToJsonString())!.ToJsonString();
+            if ((want?.ToJsonString() ?? "null") != gotText)
+            {
+                problems.Add($"evidenceLocated {path}: expected {want?.ToJsonString()}, got {gotText}");
+            }
+        }
+
         return problems;
     }
 

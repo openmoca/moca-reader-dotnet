@@ -94,6 +94,7 @@ public static class ConformanceCases
         }
 
         var evidenceMatched = new JsonObject();
+        var evidenceLocated = new JsonObject();
         if (result.Valid)
         {
             foreach (var r in new Library().Add(result).Citations())
@@ -101,6 +102,7 @@ public static class ConformanceCases
                 if (r.Evidence.Count > 0)
                 {
                     evidenceMatched[r.Node.Path] = new JsonArray([.. r.Evidence.Select(e => e.Matched is { } m ? (JsonNode)JsonValue.Create(m) : null)]);
+                    evidenceLocated[r.Node.Path] = new JsonArray([.. r.Evidence.Select(e => e.Located is { } at ? (JsonNode)new JsonObject { ["start"] = at.Start, ["end"] = at.End } : null)]);
                 }
             }
         }
@@ -121,6 +123,7 @@ public static class ConformanceCases
             ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
+            ["evidenceLocated"] = evidenceLocated,
         };
         if (sidecarUsable is not null)
         {

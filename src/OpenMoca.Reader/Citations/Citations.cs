@@ -95,12 +95,16 @@ public static class Citations
                 var source = sourceId is not null && sources.TryGetValue(sourceId, out var declared)
                     ? (JsonObject)declared.DeepClone()
                     : new JsonObject { ["id"] = e["source"]?.DeepClone() };
-                var matched = i < rep.EvidenceChecks.Count ? rep.EvidenceChecks[i].Matched : null;
+                var check = i < rep.EvidenceChecks.Count ? rep.EvidenceChecks[i] : null;
                 evidence.Add(new CitationEvidence(
                     source,
                     e["selector"] is JsonObject selector ? (JsonObject)selector.DeepClone() : null,
                     Str(e["note"]) is { Length: > 0 } note ? note : null,
-                    matched));
+                    check?.Matched)
+                {
+                    // Contract §7: where a refined quote is spoken, cue-precise.
+                    Located = check?.Located is { } at ? new EvidenceLocation(at.Start, at.End) : null,
+                });
             }
         }
 

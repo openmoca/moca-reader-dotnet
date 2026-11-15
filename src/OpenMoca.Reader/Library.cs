@@ -48,6 +48,10 @@ public sealed class Library
     private readonly DiagnosticBag _diagnostics = new();
     private StructureIndex? _structure;
 
+    /// <summary>Whether the host allows unsigned packages to make relations and to limit their members (package spec
+    /// §7.2, Reader contract §9).</summary>
+    public bool AllowUnsignedRelations => _allowUnsignedRelations;
+
     /// <summary>Creates an empty library; overlays are parsed now and their problems reported as diagnostics.</summary>
     public Library(LibraryOptions? options = null)
     {

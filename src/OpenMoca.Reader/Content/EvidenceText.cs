@@ -256,48 +256,174 @@ public static partial class EvidenceText
         SourceKind kind,
         string? normalised,
         double? duration,
+        Func<(double Start, double End), (double Start, double End)?>? toReference) =>
+        CheckSelectorLocated(selector, raw, kind, normalised, duration, toReference).Matched;
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?, double?, Func{ValueTuple{double, double}, ValueTuple{double, double}?}?)"/>,
+    /// with, for a time range refined by a quote that matched, where the quote is spoken on the cited source's
+    /// timeline (Reader contract §7).</summary>
+    public static (bool? Matched, (double Start, double End)? Located) CheckSelectorLocated(
+        JsonObject selector,
+        string raw,
+        SourceKind kind,
+        string? normalised,
+        double? duration,
         Func<(double Start, double End), (double Start, double End)?>? toReference)
     {
+        ArgumentNullException.ThrowIfNull(selector);
         if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
         {
             // Contract §7: a media time range is checked only against WebVTT, by overlap with a cue.
             if (!MediaFragments().IsMatch(JsonValues.StringOf(selector["conformsTo"]) ?? "") || kind != SourceKind.WebVtt)
             {
-                return null;
+                return (null, null);
             }
 
             var parsed = MediaTimeRange(JsonValues.StringOf(selector["value"]));
             var range = parsed is { } p && toReference is not null ? toReference(p) : parsed;
-            if (range is null)
+            if (range is null || parsed is null)
             {
-                return false;
+                return (false, null);
             }
 
             var (start, end) = range.Value;
             var cues = WebVtt(raw).Cues;
             if (!cues.Any(c => start < c.End && end > c.Start))
             {
-                return false;
+                return (false, null);
             }
 
             // Contract §7: the range lies within the media, bounded by the latest cue end or the declared duration.
-            if (double.IsPositiveInfinity(end))
+            if (!double.IsPositiveInfinity(end))
             {
-                return true;
+                var bound = cues.Max(c => c.End);
+                if (duration is { } d && d > bound)
+                {
+                    bound = d;
+                }
+
+                if (end > bound)
+                {
+                    return (false, null);
+                }
             }
 
-            var bound = cues.Max(c => c.End);
-            if (duration is { } d && d > bound)
+            // Contract §7: a range refined by a quote matches only when the quote is in the cues it covers.
+            if (selector["refinedBy"] is not JsonObject refined || JsonValues.StringOf(refined["type"]) != "TextQuoteSelector")
             {
-                bound = d;
+                return (true, null);
             }
 
-            return end <= bound;
+            if (LocateQuote(cues, range.Value, refined) is not { } located)
+            {
+                return (false, null);
+            }
+
+            // On an alternate, back to the cited source's timeline by the stretch's offset.
+            var offset = parsed.Value.Start - start;
+            return (true, (located.Start + offset, located.End + offset));
         }
 
         // The quote is normalised as the source is, so markup in either never decides a match.
         var quote = JsonValues.StringOf(selector["type"]) == "TextQuoteSelector" ? NormaliseQuote(selector, kind) : selector;
-        return SelectorMatches(quote, normalised ?? NormalisedText(raw, kind));
+        return (SelectorMatches(quote, normalised ?? NormalisedText(raw, kind)), null);
+    }
+
+    private static bool IsQuoteSpace(char c) => c is '\t' or '\n' or '\f' or '\r' or ' ';
+
+    private static string CollapseSpaces(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        var inSpace = false;
+        foreach (var c in s)
+        {
+            if (IsQuoteSpace(c))
+            {
+                if (!inSpace)
+                {
+                    sb.Append(' ');
+                }
+
+                inSpace = true;
+            }
+            else
+            {
+                sb.Append(c);
+                inSpace = false;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Contract §7: where a refining quote is spoken in a time range. The covered text is the payloads of the cues the
+    /// range overlaps, in file order, joined with LF, with each run of white space as one space (the quote's parts
+    /// too). Of every occurrence, the one whose cues span the shortest time wins, the earliest on a tie.
+    /// </summary>
+    /// <returns>From the start of the first cue the quote's text is in to the end of the last; null when the quote is
+    /// not in the covered text.</returns>
+    public static (double Start, double End)? LocateQuote(IReadOnlyList<VttCue> cues, (double Start, double End) range, JsonObject quote)
+    {
+        ArgumentNullException.ThrowIfNull(cues);
+        ArgumentNullException.ThrowIfNull(quote);
+        if (JsonValues.StringOf(quote["exact"]) is null)
+        {
+            return null;
+        }
+
+        var exact = CollapseSpaces(JsonValues.StringOf(quote["exact"])!);
+        if (exact.Trim(' ').Length == 0)
+        {
+            return null;
+        }
+
+        var prefix = CollapseSpaces(JsonValues.StringOf(quote["prefix"]) ?? "");
+        var needle = prefix + exact + CollapseSpaces(JsonValues.StringOf(quote["suffix"]) ?? "");
+        var covered = cues.Where(c => range.Start < c.End && range.End > c.Start).ToList();
+        var text = new StringBuilder();
+        var owner = new List<int>();
+        for (var i = 0; i < covered.Count; i++)
+        {
+            foreach (var c in (i > 0 ? "\n" : "") + covered[i].Text)
+            {
+                if (IsQuoteSpace(c))
+                {
+                    if (owner.Count > 0 && owner[^1] == -1)
+                    {
+                        continue;
+                    }
+
+                    text.Append(' ');
+                    owner.Add(-1);
+                }
+                else
+                {
+                    text.Append(c);
+                    owner.Add(i);
+                }
+            }
+        }
+
+        var haystack = text.ToString();
+        (double Start, double End)? best = null;
+        for (var at = haystack.IndexOf(needle, StringComparison.Ordinal); at >= 0; at = haystack.IndexOf(needle, at + 1, StringComparison.Ordinal))
+        {
+            var own = owner.Skip(at + prefix.Length).Take(exact.Length).Where(o => o >= 0).ToList();
+            if (own.Count == 0)
+            {
+                continue;
+            }
+
+            (double Start, double End) span = (covered[own[0]].Start, covered[own[^1]].End);
+            if (best is not { } b || span.End - span.Start < b.End - b.Start
+                || (span.End - span.Start == b.End - b.Start && span.Start < b.Start))
+            {
+                best = span;
+            }
+        }
+
+        return best;
     }
 
     // A quote from captions is cue text already; Markdown and HTML quotes lose markup as their sources do.

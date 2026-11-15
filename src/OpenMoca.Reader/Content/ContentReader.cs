@@ -596,14 +596,14 @@ internal static partial class ContentReader
                 }
             }
 
-            var matched = EvidenceText.CheckSelector(selector, text, kind.Value, normalised, duration, toReference);
+            var (matched, located) = EvidenceText.CheckSelectorLocated(selector, text, kind.Value, normalised, duration, toReference);
             if (matched == false)
             {
                 diagnostics.Add(DiagnosticCodes.C011EvidenceSelectorUnmatched,
                     $"evidence {JsonValues.StringOf(selector["type"])} for source \"{sourceId}\" does not match {path}", file);
             }
 
-            checks.Add(new EvidenceCheck(true, matched));
+            checks.Add(new EvidenceCheck(true, matched, matched == true ? located : null));
         }
 
         return checks;
