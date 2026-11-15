@@ -64,22 +64,21 @@ public static class MocaSchemas
             return [];
         }
 
+        // One error for each place in the value: oneOf and anyOf fail once per branch, and nested schemas repeat the
+        // failure at each level, so reporting every one would bury the first.
         var errors = new List<string>();
+        var places = new HashSet<string>(StringComparer.Ordinal);
         foreach (var detail in (results.Details ?? []).Prepend(results))
         {
-            if (detail.Errors is null)
+            if (detail.Errors is null || detail.Errors.Count == 0)
             {
                 continue;
             }
 
             var where = detail.InstanceLocation.ToString();
-            foreach (var error in detail.Errors.Values)
+            if (places.Add(where))
             {
-                var message = $"{(where.Length > 0 ? where : "(root)")} {error}";
-                if (!errors.Contains(message))
-                {
-                    errors.Add(message);
-                }
+                errors.Add($"{(where.Length > 0 ? where : "(root)")} {detail.Errors.Values.First()}");
             }
         }
 

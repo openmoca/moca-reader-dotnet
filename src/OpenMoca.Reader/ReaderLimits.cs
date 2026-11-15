@@ -30,10 +30,10 @@ public sealed record ReaderLimits
     /// <summary>Largest source file checked for evidence; larger files are not checked.</summary>
     public int MaxSourceBytesChecked { get; init; } = 8 * 1024 * 1024;
 
-    /// <summary>Evidence entries checked across a whole package (contract §3).</summary>
+    /// <summary>Evidence entries checked in one read, by the package and all its members together (contract §3).</summary>
     public int MaxEvidenceChecksPerPackage { get; init; } = 10_000;
 
-    /// <summary>Source bytes scanned for evidence across a whole package, counted once per check (contract §3).</summary>
+    /// <summary>Source bytes scanned for evidence in one read, by the package and all its members together, counted once per check (contract §3).</summary>
     public long MaxEvidenceBytesPerPackage { get; init; } = 256L * 1024 * 1024;
 
     /// <summary>How deep members may nest; a member past it is not resolved (package spec §7.1, contract §3).</summary>

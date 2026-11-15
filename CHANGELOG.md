@@ -45,6 +45,13 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
 - A source whose `id` is not a string has no `id` in every lookup.
 - Frontmatter whose `sources` has two entries with the same `id` is `C002_FRONTMATTER_INVALID` (package spec
   §5.1), so the node is not read. Before, this Reader used the first entry.
+- Contract §3: the evidence budgets (`maxEvidenceChecksPerPackage`, `maxEvidenceBytesPerPackage`) cover the whole
+  read, so a package and its members share them. Each transcript's cues are parsed once per package, not once per
+  time range checked.
+- An octal or hex integer beyond 64 bits is read as a number, or as `.inf` is when too large for a finite double
+  (package spec §5.1); reading it never throws, and `0x8000000000000000` is positive. A number that is not finite
+  may be a mapping key: its text is the key, and the node is read. Schema errors are reported once for each place
+  in the frontmatter.
 
 ### Changed (encrypted packages: hardening)
 

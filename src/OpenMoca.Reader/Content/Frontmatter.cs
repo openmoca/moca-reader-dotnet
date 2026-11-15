@@ -176,6 +176,8 @@ internal static partial class CoreSchemaYaml
                 {
                     null => "null",
                     JsonValue v => v.ToJsonString().Trim('"'),
+                    // A non-finite number as a key (.inf, 1e400) keeps the scalar's own text.
+                    JsonObject o when o["$nonFinite"] is JsonValue text => text.GetValue<string>(),
                     _ => throw new YamlException(keyEvent.Start, keyEvent.End, "mapping keys must be scalars"),
                 };
                 if (key is JsonValue sv && sv.TryGetValue<string>(out var s))
@@ -196,6 +198,40 @@ internal static partial class CoreSchemaYaml
 
         var unexpected = parser.Current!;
         throw new YamlException(unexpected.Start, unexpected.End, $"unexpected YAML event {unexpected.GetType().Name}");
+    }
+
+    /// <summary>
+    /// An octal or hex integer of any length. It is a whole number when it fits 64 bits, a double when it fits a finite
+    /// double, and otherwise non-finite, as 1e400 is (package spec §5.1).
+    /// </summary>
+    private static JsonNode Integer(string text, string digits, int radix)
+    {
+        // Exact while it fits 64 bits; past that, a double (linear time, however long the text).
+        ulong exact = 0;
+        var i = 0;
+        for (; i < digits.Length; i++)
+        {
+            var d = (ulong)Convert.ToInt32(digits[i].ToString(), 16);
+            if (exact > (ulong.MaxValue - d) / (ulong)radix)
+            {
+                break;
+            }
+
+            exact = (exact * (ulong)radix) + d;
+        }
+
+        if (i == digits.Length && exact <= long.MaxValue)
+        {
+            return JsonValue.Create((long)exact);
+        }
+
+        double number = exact;
+        for (; i < digits.Length && double.IsFinite(number); i++)
+        {
+            number = (number * radix) + Convert.ToInt32(digits[i].ToString(), 16);
+        }
+
+        return double.IsFinite(number) ? JsonValue.Create(number) : NonFinite(text);
     }
 
     private static JsonNode? ResolveScalar(Scalar scalar)
@@ -224,12 +260,12 @@ internal static partial class CoreSchemaYaml
 
         if (IntOctal().IsMatch(value))
         {
-            return JsonValue.Create(Convert.ToInt64(value[2..], 8));
+            return Integer(value, value[2..], 8);
         }
 
         if (IntHex().IsMatch(value))
         {
-            return JsonValue.Create(Convert.ToInt64(value[2..], 16));
+            return Integer(value, value[2..], 16);
         }
 
         if (FloatPattern().IsMatch(value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))

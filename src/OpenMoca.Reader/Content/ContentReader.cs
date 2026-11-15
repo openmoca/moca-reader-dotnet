@@ -54,10 +54,11 @@ internal static partial class ContentReader
         IReadOnlyDictionary<string, byte[]> bytes,
         IReadOnlyDictionary<string, string> fileDigests,
         DiagnosticBag diagnostics,
-        ReaderLimits limits)
+        ReaderLimits limits,
+        EvidenceSpend? spend = null)
     {
         var sourceText = new Dictionary<string, string>(StringComparer.Ordinal);
-        var budget = new EvidenceBudget();
+        var budget = new EvidenceBudget(spend ?? new EvidenceSpend());
         var locales = new Dictionary<string, string>(StringComparer.Ordinal);
         if (manifest["locales"] is JsonArray declared)
         {
@@ -572,15 +573,16 @@ internal static partial class ContentReader
                 continue;
             }
 
-            // Contract §3: a per-package budget of checks and of source bytes scanned.
-            if (budget.Checks >= limits.MaxEvidenceChecksPerPackage || budget.Bytes + bytes[path].Length > limits.MaxEvidenceBytesPerPackage)
+            // Contract §3: one budget of checks and of source bytes scanned, shared by the package and its members.
+            var spent = budget.Spend;
+            if (spent.Checks >= limits.MaxEvidenceChecksPerPackage || spent.Bytes + bytes[path].Length > limits.MaxEvidenceBytesPerPackage)
             {
                 checks.Add(new EvidenceCheck(true));
                 continue;
             }
 
-            budget.Checks++;
-            budget.Bytes += bytes[path].Length;
+            spent.Checks++;
+            spent.Bytes += bytes[path].Length;
             if (!sourceText.TryGetValue(path, out var text))
             {
                 // Contract §7: a leading byte order mark is not part of an evidence source.
@@ -589,8 +591,18 @@ internal static partial class ContentReader
                 sourceText[path] = text;
             }
 
+            // Each source is normalised, and a WebVTT file's cues parsed, once per package, not once per check.
             string? normalised = null;
-            if (JsonValues.StringOf(selector["type"]) != "FragmentSelector")
+            IReadOnlyList<VttCue>? cues = null;
+            if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
+            {
+                if (kind.Value == SourceKind.WebVtt && !budget.Cues.TryGetValue(path, out cues))
+                {
+                    cues = EvidenceText.WebVtt(text).Cues;
+                    budget.Cues[path] = cues;
+                }
+            }
+            else
             {
                 var key = $"{path}\u0000{kind.Value}";
                 if (!budget.Normalised.TryGetValue(key, out normalised))
@@ -600,7 +612,7 @@ internal static partial class ContentReader
                 }
             }
 
-            var (matched, located) = EvidenceText.CheckSelectorLocated(selector, text, kind.Value, normalised, duration, toReference);
+            var (matched, located) = EvidenceText.CheckSelectorLocated(selector, text, kind.Value, normalised, duration, toReference, cues);
             if (matched == false)
             {
                 diagnostics.Add(DiagnosticCodes.C011EvidenceSelectorUnmatched,
@@ -771,13 +783,21 @@ internal static partial class ContentReader
         }
     }
 
-    /// <summary>Contract §3: evidence work across a whole package.</summary>
-    internal sealed class EvidenceBudget
+    /// <summary>Contract §3: the evidence checks made and source bytes scanned in one read, by the package and its members.</summary>
+    internal sealed class EvidenceSpend
     {
         public int Checks { get; set; }
 
         public long Bytes { get; set; }
+    }
+
+    /// <summary>Contract §3: one package's evidence work: the read's shared spend, and each source prepared once.</summary>
+    private sealed class EvidenceBudget(EvidenceSpend spend)
+    {
+        public EvidenceSpend Spend { get; } = spend;
 
         public Dictionary<string, string> Normalised { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, IReadOnlyList<VttCue>> Cues { get; } = new(StringComparer.Ordinal);
     }
 }

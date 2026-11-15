@@ -268,7 +268,8 @@ public static partial class EvidenceText
         SourceKind kind,
         string? normalised,
         double? duration,
-        Func<(double Start, double End), (double Start, double End)?>? toReference)
+        Func<(double Start, double End), (double Start, double End)?>? toReference,
+        IReadOnlyList<VttCue>? cues = null)
     {
         ArgumentNullException.ThrowIfNull(selector);
         if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
@@ -287,7 +288,7 @@ public static partial class EvidenceText
             }
 
             var (start, end) = range.Value;
-            var cues = WebVtt(raw).Cues;
+            cues ??= WebVtt(raw).Cues;
             if (!cues.Any(c => start < c.End && end > c.Start))
             {
                 return (false, null);

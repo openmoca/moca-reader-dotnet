@@ -190,6 +190,33 @@ public sealed class BudgetTests : IDisposable
         Assert.Equal(1, calls); // only the first entry for the id is resolved
     }
 
+    [Fact]
+    public async Task APackageAndItsMembers_ShareOneEvidenceBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        static Dictionary<string, string> Files(string title) => new()
+        {
+            ["content/a.md"] = $"---\ntype: Note\ntitle: {title}\nsources:\n  - {{ id: s, resource: ../sources/s.txt }}\nmoca:\n"
+                + "  evidence:\n    - { source: s, selector: { type: TextQuoteSelector, exact: the tide turns } }\n"
+                + $"---\n# {title}\n",
+            ["sources/s.txt"] = "Here the tide turns at noon.",
+        };
+        var member = Package("pkgs/member", new { id = $"{Id}/member", title = "Member" }, Files("Member"));
+        var digest = (await MocaReader.ReadPackageAsync(member, cancellationToken: ct)).Digest!;
+        var top = Package("top", new { id = $"{Id}/top", title = "Top", members = Members([Pin($"{Id}/member", digest)]) }, Files("Top"));
+        Func<MemberReference, CancellationToken, ValueTask<PackageTarget?>> resolve = (_, _) => ValueTask.FromResult<PackageTarget?>(member);
+        static bool? Matched(PackageResult r) => r.Nodes[0].Representations[0].EvidenceChecks[0].Matched;
+
+        var full = await MocaReader.ReadPackageAsync(top, new ReadOptions { ResolveMember = resolve }, ct);
+        Assert.True(Matched(full));
+        Assert.True(Matched(full.Members[0].Result!));
+
+        // One check in all: the composing package spends it, so its member's evidence is not checked.
+        var one = await MocaReader.ReadPackageAsync(top, new ReadOptions { ResolveMember = resolve, Limits = new ReaderLimits { MaxEvidenceChecksPerPackage = 1 } }, ct);
+        Assert.True(Matched(one));
+        Assert.Null(Matched(one.Members[0].Result!));
+    }
+
     private static string Node(string title) => $"---\ntype: Note\ntitle: {title}\n---\n# {title}\n";
 
     private static string Pin(string id, string digest) => JsonSerializer.Serialize(new { id, version = "1.0.0", digest });

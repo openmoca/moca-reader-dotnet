@@ -186,7 +186,7 @@ public static partial class MocaReader
             result.PayloadManifest = payloadManifest;
         }
 
-        result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits);
+        result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits, budget.Evidence);
         result.Structure = PackageStructure.Read(bytes, result.Nodes, diagnostics, options.Limits, result.Digest);
         // Package spec §4.10: readingOrder resolves against the package's own structure.ttl only.
         if (JsonValues.StringOf(manifest["readingOrder"]) is { } readingOrder && !diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
@@ -657,6 +657,9 @@ public static partial class MocaReader
         public long Bytes { get; set; }
 
         public Dictionary<(string Id, string? Version, string Digest), PackageResult?> Members { get; } = [];
+
+        /// <summary>The evidence budget, shared by the package and every member it reads.</summary>
+        public ContentReader.EvidenceSpend Evidence { get; } = new();
     }
 
     /// <summary>Compares a matched <c>major.minor</c> with a version string, numerically and without overflow.</summary>
