@@ -25,7 +25,7 @@ public static class PackageSources
             return new ArchiveSource(File.ReadAllBytes(path), path, limits ?? ReaderLimits.Default);
         }
 
-        // Encrypted packages §2: an envelope (conventionally .moca.enc) is recognised by content, so any file that starts
+        // Encrypted packages §2: an envelope (conventionally .mocae) is recognised by content, so any file that starts
         // with a Zip signature is read as an archive.
         if (File.Exists(path) && StartsWithZipSignature(path))
         {

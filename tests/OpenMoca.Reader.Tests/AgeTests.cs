@@ -264,7 +264,7 @@ public sealed class AgeTests
         var identities = File.ReadAllLines(identityFile).Where(l => l.StartsWith("AGE-SECRET-KEY-1", StringComparison.Ordinal)).ToList();
         const string passphrase = "moca-conformance-INSECURE-passphrase";
         var compared = 0;
-        foreach (var path in Directory.GetFiles(envelopes, "*.moca.enc"))
+        foreach (var path in Directory.GetFiles(envelopes, "*.mocae"))
         {
             using var zip = ZipFile.OpenRead(path);
             var entry = zip.GetEntry("package.age");
@@ -293,7 +293,7 @@ public sealed class AgeTests
             }
 
             // MOCA's own limit: a header over 64 KiB is E006 here, and Go age has no such limit.
-            if (Path.GetFileName(path) == "header-over-64k.moca.enc")
+            if (Path.GetFileName(path) == "header-over-64k.mocae")
             {
                 Assert.Null(ours);
                 Assert.Equal(0, go.Code);

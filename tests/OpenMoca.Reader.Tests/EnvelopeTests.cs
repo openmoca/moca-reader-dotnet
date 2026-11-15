@@ -30,7 +30,7 @@ public sealed partial class EnvelopeTests
     [Fact]
     public async Task NoDecryptor_RecognisesAndDoesNotOpen()
     {
-        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = null }, TestContext.Current.CancellationToken);
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey) with { EnvelopeDecryptor = null }, TestContext.Current.CancellationToken);
         Assert.False(r.Valid);
         Assert.Equal([DiagnosticCodes.E001EncryptedNoKey], r.Diagnostics.Select(d => d.Code));
         Assert.False(r.Envelope!.Opened);
@@ -44,7 +44,7 @@ public sealed partial class EnvelopeTests
     [Fact]
     public async Task NoDecryptor_EntryChecksStillRun()
     {
-        var r = await MocaReader.ReadPackageAsync(Fixture("extra-entry.moca.enc"), cancellationToken: TestContext.Current.CancellationToken);
+        var r = await MocaReader.ReadPackageAsync(Fixture("extra-entry.mocae"), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal([DiagnosticCodes.E005EnvelopeInvalid], r.Diagnostics.Select(d => d.Code));
     }
 
@@ -52,8 +52,8 @@ public sealed partial class EnvelopeTests
     public async Task Bytes_OpenLikeAPath()
     {
         var ct = TestContext.Current.CancellationToken;
-        var a = await MocaReader.ReadPackageAsync(PackageTarget.FromArchive(File.ReadAllBytes(Fixture("x25519.moca.enc"))), WithKey(TestKey), ct);
-        var b = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey), ct);
+        var a = await MocaReader.ReadPackageAsync(PackageTarget.FromArchive(File.ReadAllBytes(Fixture("x25519.mocae"))), WithKey(TestKey), ct);
+        var b = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey), ct);
         Assert.True(a.Valid);
         Assert.Equal(b.Digest, a.Digest);
         Assert.Equal(new EnvelopeInfo("moca-enc-v1", true), a.Envelope);
@@ -63,7 +63,7 @@ public sealed partial class EnvelopeTests
     public async Task ThrowingKeyProvider_IsE001_NeverThrown()
     {
         var options = WithKey(TestKey) with { KeyProvider = (_, _) => throw new InvalidOperationException("vault offline") };
-        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken);
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), options, TestContext.Current.CancellationToken);
         Assert.Equal([DiagnosticCodes.E001EncryptedNoKey], r.Diagnostics.Select(d => d.Code));
     }
 
@@ -72,7 +72,7 @@ public sealed partial class EnvelopeTests
     {
         EnvelopeKeyRequest? seen = null;
         var options = WithKey(TestKey) with { KeyProvider = (req, _) => { seen = req; return ValueTask.FromResult<EnvelopeKey?>(null); } };
-        await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken);
+        await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), options, TestContext.Current.CancellationToken);
         Assert.Equal("package", seen!.File);
         Assert.Equal("X25519", seen.Stanzas[0].Type);
         Assert.Equal(32, seen.Stanzas[0].Body.Length);
@@ -92,7 +92,7 @@ public sealed partial class EnvelopeTests
         try
         {
             Assert.StartsWith(locked, Path.GetTempPath(), StringComparison.Ordinal);
-            var r = await MocaReader.ReadPackageAsync(Fixture("large.moca.enc"), WithKey(TestKey), TestContext.Current.CancellationToken);
+            var r = await MocaReader.ReadPackageAsync(Fixture("large.mocae"), WithKey(TestKey), TestContext.Current.CancellationToken);
             Assert.True(r.Valid);
             Assert.True(r.Envelope!.Opened);
         }
@@ -119,8 +119,8 @@ public sealed partial class EnvelopeTests
         var indexAge = AgeTests.Run("age", ["-r", recipient], sidecar.ToArray(), null).Stdout;
 
         var dir = Directory.CreateTempSubdirectory("moca-index-age-").FullName;
-        var path = Path.Combine(dir, "with-index.moca.enc");
-        File.Copy(Fixture("x25519.moca.enc"), path);
+        var path = Path.Combine(dir, "with-index.mocae");
+        File.Copy(Fixture("x25519.mocae"), path);
         using (var zip = ZipFile.Open(path, ZipArchiveMode.Update))
         {
             using var s = zip.CreateEntry("index.age", CompressionLevel.NoCompression).Open();
@@ -149,7 +149,7 @@ public sealed partial class EnvelopeTests
     public async Task KeyProviderError_NeverReachesADiagnostic_OnlyItsTypeName()
     {
         var options = WithKey(TestKey) with { KeyProvider = (_, _) => throw new InvalidOperationException("vault https://vault.example/v1?token=s3cret is offline") };
-        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, TestContext.Current.CancellationToken);
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), options, TestContext.Current.CancellationToken);
         var d = Assert.Single(r.Diagnostics);
         Assert.Equal(DiagnosticCodes.E001EncryptedNoKey, d.Code);
         Assert.DoesNotContain("s3cret", d.Message, StringComparison.Ordinal);
@@ -169,9 +169,9 @@ public sealed partial class EnvelopeTests
     public async Task NothingADecryptorThrows_ReachesTheCaller_E006WhileParsingE002After()
     {
         var ct = TestContext.Current.CancellationToken;
-        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(true) }, ct);
+        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(true) }, ct);
         Assert.Equal([DiagnosticCodes.E006AgeHeaderInvalid], parse.Diagnostics.Select(d => d.Code));
-        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(false) }, ct);
+        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey) with { EnvelopeDecryptor = new ThrowingDecryptor(false) }, ct);
         Assert.Equal([DiagnosticCodes.E002DecryptionFailed], later.Diagnostics.Select(d => d.Code));
     }
 
@@ -202,11 +202,11 @@ public sealed partial class EnvelopeTests
     {
         var ct = TestContext.Current.CancellationToken;
         var provider = WithKey(TestKey) with { KeyProvider = (_, _) => throw new TaskCanceledException("the vault timed out") };
-        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), provider, ct);
+        var r = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), provider, ct);
         Assert.Equal([DiagnosticCodes.E001EncryptedNoKey], r.Diagnostics.Select(d => d.Code));
-        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(true) }, ct);
+        var parse = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(true) }, ct);
         Assert.Equal([DiagnosticCodes.E006AgeHeaderInvalid], parse.Diagnostics.Select(d => d.Code));
-        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(false) }, ct);
+        var later = await MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), WithKey(TestKey) with { EnvelopeDecryptor = new CancellingDecryptor(false) }, ct);
         Assert.Equal([DiagnosticCodes.E002DecryptionFailed], later.Diagnostics.Select(d => d.Code));
     }
 
@@ -223,7 +223,7 @@ public sealed partial class EnvelopeTests
                 return ValueTask.FromResult<EnvelopeKey?>(null);
             },
         };
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => MocaReader.ReadPackageAsync(Fixture("x25519.moca.enc"), options, cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => MocaReader.ReadPackageAsync(Fixture("x25519.mocae"), options, cts.Token));
     }
 
     /// <summary>
@@ -233,7 +233,7 @@ public sealed partial class EnvelopeTests
     [Fact]
     public async Task Zip64Envelope_WithADeflatedPackage_IsE005()
     {
-        var zip = File.ReadAllBytes(Fixture("deflated-package.moca.enc"));
+        var zip = File.ReadAllBytes(Fixture("deflated-package.mocae"));
         var eocd = zip.AsSpan().LastIndexOf("PK\u0005\u0006"u8);
         var count = BitConverter.ToUInt16(zip, eocd + 10);
         var size = BitConverter.ToUInt32(zip, eocd + 12);
