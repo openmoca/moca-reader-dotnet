@@ -51,9 +51,26 @@ public static class ConformanceCases
         return Str(c["kind"]) switch
         {
             "structure" => await StructureCaseAsync(root, c, readOptions, overlays, cancellationToken),
+            "map-time" => await MapTimeCaseAsync(root, c, readOptions, cancellationToken),
             "search" => await SearchCaseAsync(root, c, o, readOptions, overlays, cancellationToken),
             _ => await PackageCaseAsync(root, c, o, readOptions, cancellationToken),
         };
+    }
+
+    // Reader interface §4: MapTime on the node's default-language citation record, once per call.
+    private static async Task<JsonObject> MapTimeCaseAsync(string root, JsonObject c, ReadOptions readOptions, CancellationToken cancellationToken)
+    {
+        var result = await MocaReader.ReadPackageAsync(Path.Combine(root, Str(c["target"])!), readOptions, cancellationToken);
+        var record = result.Valid ? new Library().Add(result).Citations().FirstOrDefault(r => r.Node.Path == Str(c["node"])) : null;
+        var answers = new JsonArray();
+        foreach (var call in (c["calls"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            var t = call["t"]!.GetValue<double>();
+            var mapped = record is null ? null : Alternates.MapTime(record, Str(call["from"])!, Str(call["to"])!, t);
+            answers.Add(mapped is { } v ? JsonValue.Create(v) : null);
+        }
+
+        return new JsonObject { ["codes"] = StructureJson.Strings(result.Diagnostics.Select(d => d.Code)), ["result"] = answers };
     }
 
     private static async Task<JsonObject> PackageCaseAsync(string root, JsonObject c, JsonObject o, ReadOptions readOptions, CancellationToken cancellationToken)

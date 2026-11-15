@@ -245,7 +245,18 @@ public static partial class EvidenceText
 
     /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?)"/>, with the declared duration of
     /// the media, which bounds a time range with the latest cue end (Reader contract §7).</summary>
-    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised, double? duration)
+    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised, double? duration) =>
+        CheckSelector(selector, raw, kind, normalised, duration, null);
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?, double?)"/>, with a mapping from the
+    /// cited alternate's timeline to its reference's (package spec §5.7); a range that does not map does not match.</summary>
+    public static bool? CheckSelector(
+        JsonObject selector,
+        string raw,
+        SourceKind kind,
+        string? normalised,
+        double? duration,
+        Func<(double Start, double End), (double Start, double End)?>? toReference)
     {
         if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
         {
@@ -255,7 +266,8 @@ public static partial class EvidenceText
                 return null;
             }
 
-            var range = MediaTimeRange(JsonValues.StringOf(selector["value"]));
+            var parsed = MediaTimeRange(JsonValues.StringOf(selector["value"]));
+            var range = parsed is { } p && toReference is not null ? toReference(p) : parsed;
             if (range is null)
             {
                 return false;

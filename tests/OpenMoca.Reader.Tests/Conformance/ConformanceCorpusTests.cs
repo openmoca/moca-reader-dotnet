@@ -48,7 +48,7 @@ public sealed class ConformanceCorpusTests
         var problems = JsonValues.StringOf(c["kind"]) switch
         {
             "search" => CheckSearch(expect, actual),
-            "structure" => CheckStructure(expect, actual),
+            "structure" or "map-time" => CheckStructure(expect, actual),
             _ => CheckPackage(expect, actual),
         };
 

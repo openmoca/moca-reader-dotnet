@@ -135,7 +135,16 @@ public sealed record CitationMedia(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("duration")] double? Duration = null,
     [property: JsonPropertyName("digest")] string? Digest = null,
-    [property: JsonPropertyName("transcript")] string? Transcript = null);
+    [property: JsonPropertyName("transcript")] string? Transcript = null)
+{
+    /// <summary>The <c>source</c> of the reference, when this description is a valid alternate (package spec §5.7).</summary>
+    [JsonPropertyName("alternateOf")]
+    public string? AlternateOf { get; init; }
+
+    /// <summary>The alternate's stretches; present with <see cref="AlternateOf"/>.</summary>
+    [JsonPropertyName("sync")]
+    public IReadOnlyList<OpenMoca.Reader.Content.SyncEntry>? Sync { get; init; }
+}
 
 /// <summary>UTF-8 byte offsets into the node file.</summary>
 public sealed record CitationSpan(

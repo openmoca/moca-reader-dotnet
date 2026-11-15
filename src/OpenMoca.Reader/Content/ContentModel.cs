@@ -12,7 +12,23 @@ public sealed record MediaDescription(string Source, string Resource, string Typ
 {
     /// <summary>The package path of the transcript, when it names one.</summary>
     internal string? TranscriptPath { get; init; }
+
+    /// <summary>The <c>source</c> of the reference this description is a valid alternate of (§5.7, Alternates).</summary>
+    public string? AlternateOf { get; init; }
+
+    /// <summary>The stretches of a valid alternate: its <c>sync</c>, or the default <c>[{ at: 0, offset: 0 }]</c>.</summary>
+    public IReadOnlyList<SyncEntry>? Sync { get; init; }
 }
+
+/// <summary>
+/// One entry of an alternate's <c>sync</c> (package spec §5.7): from <paramref name="At"/> on the reference, the
+/// alternate is <paramref name="Offset"/> seconds later, or, when it is null, does not hold that stretch.
+/// </summary>
+/// <param name="At">A time on the reference, in seconds.</param>
+/// <param name="Offset">Seconds to add to reach the alternate, or null.</param>
+public sealed record SyncEntry(
+    [property: System.Text.Json.Serialization.JsonPropertyName("at")] double At,
+    [property: System.Text.Json.Serialization.JsonPropertyName("offset"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)] double? Offset);
 
 /// <summary>One language version of a node (package spec §5.4).</summary>
 public sealed class Representation

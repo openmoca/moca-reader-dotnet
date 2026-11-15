@@ -292,7 +292,7 @@ internal static partial class ContentReader
     [GeneratedRegex(@"^sha256:[a-f0-9]{64}\z")]
     private static partial Regex Sha256Digest();
 
-    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript"], StringComparer.Ordinal);
+    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript", "alternateOf", "sync"], StringComparer.Ordinal);
 
     /// <summary>A finite JSON number, or null.</summary>
     private static double? NumberOf(JsonNode? node)
@@ -342,8 +342,36 @@ internal static partial class ContentReader
             return false;
         }
 
-        return !m.ContainsKey("transcript") || JsonValues.StringOf(m["transcript"]) is { Length: > 0 };
+        if (m.ContainsKey("transcript") && JsonValues.StringOf(m["transcript"]) is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        if (m.ContainsKey("alternateOf") && JsonValues.StringOf(m["alternateOf"]) is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        return !m.ContainsKey("sync") || (m["sync"] is JsonArray { Count: > 0 } sync && sync.All(WellFormedSyncEntry));
     }
+
+    private static bool WellFormedSyncEntry(JsonNode? node)
+    {
+        if (node is not JsonObject e || e.Any(p => p.Key is not ("at" or "offset")) || !e.ContainsKey("offset"))
+        {
+            return false;
+        }
+
+        if (NumberOf(e["at"]) is not >= 0)
+        {
+            return false;
+        }
+
+        return e["offset"] is null || NumberOf(e["offset"]) is not null;
+    }
+
+    private static List<SyncEntry> SyncOf(JsonNode? node) =>
+        node is JsonArray list ? [.. list.OfType<JsonObject>().Select(e => new SyncEntry(NumberOf(e["at"])!.Value, NumberOf(e["offset"])))] : [.. Alternates.DefaultSync];
 
     /// <summary>The package path of a resource when it is a file under sources/ or media/, or null.</summary>
     private static string? LocalEvidencePath(string file, string? resource, IReadOnlyDictionary<string, string> files)
@@ -377,6 +405,7 @@ internal static partial class ContentReader
 
         var sources = SourcesById(frontmatter);
         var described = new HashSet<string>(StringComparer.Ordinal);
+        var raw = new List<JsonObject>();
         foreach (var node in list)
         {
             if (!WellFormedMedia(node))
@@ -426,6 +455,37 @@ internal static partial class ContentReader
             {
                 TranscriptPath = transcriptPath,
             });
+            raw.Add(m);
+        }
+
+        // §5.7, Alternates: checked once every description is known, so the order of descriptions does not matter.
+        for (var i = 0; i < output.Count; i++)
+        {
+            var d = output[i];
+            var m = raw[i];
+            if (JsonValues.StringOf(m["alternateOf"]) is not { } alternateOf)
+            {
+                if (m.ContainsKey("sync"))
+                {
+                    diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media \"{d.Source}\" has sync but no alternateOf; sync is dropped", file);
+                }
+
+                continue;
+            }
+
+            var refIndex = output.FindIndex(x => x.Source == alternateOf);
+            var sync = SyncOf(m["sync"]);
+            var problem = refIndex < 0 ? $"names \"{alternateOf}\", which is no valid description in this node"
+                : refIndex == i ? "names itself"
+                : raw[refIndex].ContainsKey("alternateOf") ? $"names \"{output[refIndex].Source}\", which is an alternate itself"
+                : Alternates.SyncProblem(sync);
+            if (problem is not null)
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media \"{d.Source}\" alternateOf {problem}; alternateOf and sync are dropped", file);
+                continue;
+            }
+
+            output[i] = d with { AlternateOf = alternateOf, Sync = sync };
         }
 
         return output;
@@ -465,12 +525,22 @@ internal static partial class ContentReader
             // Contract §7: a time range is checked against the cited WebVTT file, or the transcript of the cited media,
             // and bounded by the media's duration. A time range checked this way is evidence checkable in the package.
             double? duration = null;
+            Func<(double Start, double End), (double Start, double End)?>? toReference = null;
             if (EvidenceText.IsMediaTimeRange(entry?["selector"]) && (path is null || EvidenceText.KindOf(path) != SourceKind.WebVtt))
             {
-                if (media.FirstOrDefault(d => d.Source == sourceId) is { TranscriptPath: { } transcriptPath } described)
+                var cited = media.FirstOrDefault(d => d.Source == sourceId);
+                if (cited is { TranscriptPath: { } transcriptPath })
                 {
                     path = transcriptPath;
-                    duration = described.Duration;
+                    duration = cited.Duration;
+                }
+                else if (cited is { AlternateOf: { } refId, Sync: { } sync }
+                    && media.FirstOrDefault(d => d.Source == refId) is { TranscriptPath: { } refTranscript } reference)
+                {
+                    // §5.7: an alternate with no transcript of its own is checked through its reference.
+                    path = refTranscript;
+                    duration = reference.Duration;
+                    toReference = range => Alternates.RangeToReference(sync, range);
                 }
             }
             else if (path is not null && EvidenceText.KindOf(path) == SourceKind.WebVtt)
@@ -526,7 +596,7 @@ internal static partial class ContentReader
                 }
             }
 
-            var matched = EvidenceText.CheckSelector(selector, text, kind.Value, normalised, duration);
+            var matched = EvidenceText.CheckSelector(selector, text, kind.Value, normalised, duration, toReference);
             if (matched == false)
             {
                 diagnostics.Add(DiagnosticCodes.C011EvidenceSelectorUnmatched,
