@@ -123,6 +123,6 @@ public sealed class IssuedCopyTests
         Assert.NotNull(state.Composition);
         var back = JsonSerializer.Deserialize<PackageState>(JsonSerializer.Serialize(state))!;
         Assert.Equal(JsonSerializer.Serialize(state.Composition), JsonSerializer.Serialize(back.Composition));
-        Assert.Equal(4, back.Composition!.Count); // the season, and the three releases
+        Assert.Equal(4, back.Composition!.Members.Count); // the season, and the three releases
     }
 }

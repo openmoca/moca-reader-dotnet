@@ -105,6 +105,12 @@ public static partial class MocaReader
             return Finish(result, diagnostics);
         }
 
+        // Contract §3: the bytes of every member read count toward one budget for the whole read.
+        if (stack.Count > 0)
+        {
+            budget.Bytes += bytes.Values.Sum(b => (long)b.Length);
+        }
+
         result.FileBytes = bytes;
         JsonObject? manifest;
         try
@@ -493,21 +499,34 @@ public static partial class MocaReader
                 continue;
             }
 
-            if (budget.Resolved >= options.Limits.MaxMembers)
+            // Contract §3: a pin met again in the same read shares the first read's result and counts once.
+            var pin = $"{memberId}@{reference.Version}#{digest}";
+            if (!budget.Members.TryGetValue(pin, out var child))
             {
-                diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: more than {options.Limits.MaxMembers} members in one read", PackageDigest.ManifestFile);
-                continue;
+                if (budget.Resolved >= options.Limits.MaxMembers)
+                {
+                    diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: more than {options.Limits.MaxMembers} members in one read", PackageDigest.ManifestFile);
+                    continue;
+                }
+
+                if (budget.Bytes > options.Limits.MaxMemberBytes)
+                {
+                    diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: the members read so far hold more than {options.Limits.MaxMemberBytes} bytes", PackageDigest.ManifestFile);
+                    continue;
+                }
+
+                budget.Resolved++;
+                var target = await options.ResolveMember(reference, cancellationToken).ConfigureAwait(false);
+                child = target is null ? null : await ReadInternalAsync(target, options, [.. stack, self], budget, cancellationToken).ConfigureAwait(false);
+                budget.Members[pin] = child;
             }
 
-            budget.Resolved++;
-            var target = await options.ResolveMember(reference, cancellationToken).ConfigureAwait(false);
-            if (target is null)
+            if (child is null)
             {
                 diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberId}@{reference.Version} could not be resolved", PackageDigest.ManifestFile);
                 continue;
             }
 
-            var child = await ReadInternalAsync(target, options, [.. stack, self], budget, cancellationToken).ConfigureAwait(false);
             entry.Result = child;
             if (child.Diagnostics.Any(d => d.Code == DiagnosticCodes.R003MemberCycle))
             {
@@ -623,9 +642,14 @@ public static partial class MocaReader
     }
 
     /// <summary>Members resolved so far in one read, shared by every level (package spec §7.1).</summary>
+    /// <summary>Contract §3: what one read has spent on members, and each member read so far, by pin.</summary>
     private sealed class MemberBudget
     {
         public int Resolved { get; set; }
+
+        public long Bytes { get; set; }
+
+        public Dictionary<string, PackageResult?> Members { get; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>Compares a matched <c>major.minor</c> with a version string, numerically and without overflow.</summary>

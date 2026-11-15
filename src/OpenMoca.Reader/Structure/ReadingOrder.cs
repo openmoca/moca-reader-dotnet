@@ -32,27 +32,30 @@ public sealed record ReadingOrder
             return null;
         }
 
-        var positions = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        // Contract §3: one walk in list order, with one visited set. A concept first reached from member i keeps i, as it
+        // would if each member were walked on its own, and nothing is walked twice.
+        var positions = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < collection.Members.Count; i++)
         {
             var stack = new Stack<string>([collection.Members[i]]);
-            var seen = new HashSet<string>(StringComparer.Ordinal);
             while (stack.TryPop(out var n))
             {
-                if (!seen.Add(n))
+                if (!positions.TryAdd(n, i))
                 {
                     continue;
                 }
 
-                positions.TryAdd(n, i);
                 foreach (var e in graph.In("broader", n).Concat(graph.Out("hasPart", n)))
                 {
-                    stack.Push(e.Iri);
+                    if (!positions.ContainsKey(e.Iri))
+                    {
+                        stack.Push(e.Iri);
+                    }
                 }
             }
         }
 
-        return new ReadingOrder { Iri = iri, Members = [.. collection.Members], Positions = positions };
+        return new ReadingOrder { Iri = iri, Members = [.. collection.Members], Positions = new SortedDictionary<string, int>(positions, StringComparer.Ordinal) };
     }
 
     /// <summary>

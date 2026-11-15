@@ -475,6 +475,7 @@ public static class ConformanceCases
             MaxScryptWorkFactor = Int("maxScryptWorkFactor") ?? d.MaxScryptWorkFactor,
             MaxImageBytes = Int("maxImageBytes") ?? d.MaxImageBytes,
             MaxMembers = Int("maxMembers") ?? d.MaxMembers,
+            MaxMemberBytes = JsonValues.IntegerOf(limits["maxMemberBytes"]) ?? d.MaxMemberBytes,
             MaxMemberDepth = Int("maxMemberDepth") ?? d.MaxMemberDepth,
         };
     }

@@ -43,6 +43,12 @@ public sealed record ReaderLimits
     public int MaxMembers { get; init; } = 4096;
 
     /// <summary>
+    /// Bytes of all the members read in one read, each distinct member counted once; checked before each new member
+    /// is resolved, and R001 for each further member (contract §3).
+    /// </summary>
+    public long MaxMemberBytes { get; init; } = 1024L * 1024 * 1024;
+
+    /// <summary>
     /// The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt
     /// (encrypted packages §4). An integer from 1 to 22: anything else throws <see cref="ArgumentOutOfRangeException"/>
     /// when the limits are made, before any read starts (Reader contract §3).

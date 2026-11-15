@@ -213,11 +213,11 @@ public sealed class StructureIndex
         }
 
         // Package spec §5.6: a record is bound by its node's own concepts and by composition, as for search.
-        var composition = Composition.Index(_library.Packages
+        var composition = new CompositionIndex(_library.Packages
             .Where(p => p.Result.Digest is not null)
-            .Select(p => (p.Result.Digest!, (IReadOnlyList<CompositionBinding>?)Composition.Of(p.Result))));
+            .Select(p => (p.Result.Digest!, Composition.Of(p.Result))));
         return _library.Citations(locale, includeText: true)
-            .Where(r => Composition.BoundConcepts(r, composition).Any(wanted.Contains))
+            .Where(r => composition.BoundTo(r, wanted))
             .Where(r => includeAll || Citations.Citations.PassesDefaultPolicy(r))
             .OrderBy(r => r.Node.Ref, StringComparer.Ordinal)
             .ToList();

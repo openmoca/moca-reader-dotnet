@@ -101,8 +101,8 @@ public sealed class MocaSearch
 
         Diagnostics = findings.Items;
         // Package spec §5.6: what each loaded composing package binds its members to.
-        var composition = Composition.Index(_library is not null
-            ? loaded.Values.Select(r => (r.Digest!, (IReadOnlyList<CompositionBinding>?)Composition.Of(r)))
+        var composition = new CompositionIndex(_library is not null
+            ? loaded.Values.Select(r => (r.Digest!, Composition.Of(r)))
             : _states!.Values.Select(s => (s.Digest, s.Composition)));
         var request = caller;
         var hookContext = new HookContext(request, _library, _library?.Structure, _audiences, now);
@@ -118,7 +118,7 @@ public sealed class MocaSearch
             };
         }
 
-        var (fetch, filters) = Plan(request, now, index, composition.Count > 0);
+        var (fetch, filters) = Plan(request, now, index, composition.HasBindings);
         var hits = await _backend.SearchAsync(effectiveQuery, fetch, filters, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<CitationRecord> candidates = Resolve(hits, now, index, loaded);
         if (_hooks.Egress is not null)
@@ -179,23 +179,32 @@ public sealed class MocaSearch
     /// and whose reading order places upTo limits it by the node's own concepts and the concepts it binds it to.
     /// </summary>
     private bool PassesUpTo(CitationRecord record, string upTo, Dictionary<string, PackageResult> loaded,
-        Dictionary<string, List<(string Composer, CompositionBinding Binding)>> composition)
+        CompositionIndex composition, Dictionary<string, (ReadingOrder Order, HashSet<string> Late)?> late)
     {
         if (!ReadingOrder.Passes(record, ReadingOrderOf(record.Package.Digest, loaded), upTo))
         {
             return false;
         }
 
-        foreach (var (composer, binding) in composition.GetValueOrDefault(record.Package.Digest) ?? [])
+        // Every composer that holds the member limits it by the node's own concepts (contract §9, Members), and by the
+        // concepts it binds it to: none of them, or their ancestors, may come after upTo.
+        foreach (var composer in composition.ComposersOf(record.Package.Digest))
         {
-            var order = ReadingOrderOf(composer, loaded);
-            if (order is null || !order.Positions.ContainsKey(upTo))
+            if (!late.TryGetValue(composer.Digest, out var entry))
+            {
+                var order = ReadingOrderOf(composer.Digest, loaded);
+                entry = order is not null && order.Positions.TryGetValue(upTo, out var limit)
+                    ? (order, order.Positions.Where(kv => kv.Value > limit).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal))
+                    : null;
+                late[composer.Digest] = entry;
+            }
+
+            if (entry is not { } e)
             {
                 continue;
             }
 
-            var bound = record with { Concepts = [.. (record.Concepts ?? []).Concat(Composition.ConceptsFor(binding, record))] };
-            if (!ReadingOrder.Passes(bound, order, upTo))
+            if (!ReadingOrder.Passes(record, e.Order, upTo) || composer.Binds(record, e.Late))
             {
                 return false;
             }
@@ -256,9 +265,11 @@ public sealed class MocaSearch
 
     /// <summary>The gate (contract §9.2 step 5): always last, whatever the backend and the hooks did.</summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
-        Dictionary<string, List<(string Composer, CompositionBinding Binding)>> composition)
+        CompositionIndex composition)
     {
         var concepts = ConceptsFor(caller);
+        var wanted = concepts is null ? null : concepts.ToHashSet(StringComparer.Ordinal);
+        var late = new Dictionary<string, (ReadingOrder Order, HashSet<string> Late)?>(StringComparer.Ordinal);
         var allowed = _library is not null ? loaded.Keys.ToHashSet(StringComparer.Ordinal) : _allowed!;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var records = new List<CitationRecord>();
@@ -284,13 +295,13 @@ public sealed class MocaSearch
                 continue;
             }
 
-            if (concepts is not null && !Composition.BoundConcepts(record, composition).Any(concepts.Contains))
+            if (wanted is not null && !composition.BoundTo(record, wanted))
             {
                 continue;
             }
 
             // Contract §9.2 step 6: upTo follows the caller; an ingress hook never changes it.
-            if (caller.UpTo is { } upTo && !PassesUpTo(record, upTo, loaded, composition))
+            if (caller.UpTo is { } upTo && !PassesUpTo(record, upTo, loaded, composition, late))
             {
                 continue;
             }
