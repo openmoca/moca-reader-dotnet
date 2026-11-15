@@ -109,7 +109,8 @@ public static class Citations
         {
             Package = new CitationPackage(result.Id, result.Version, result.Digest ?? "", result.Signers.Count > 0,
                 result.Signers.Count > 0 ? [.. result.Signers] : null,
-                result.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null),
+                result.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null,
+                result.DatePublished),
             Node = new CitationNode
             {
                 Id = $"{result.Id}#{node.Path}",
@@ -122,6 +123,10 @@ public static class Citations
                 Tags = fm["tags"] is JsonArray tags ? tags.Select(Str).OfType<string>().ToList() : null,
                 Digest = rep.Sha256 is not null ? $"sha256:{rep.Sha256}" : null,
                 IssuedChange = result.IssuedCopy?.ChangedFiles.Contains(rep.File) == true ? true : null,
+                // Package spec §4.12: the node's own date, never the package's; absent when it does not parse.
+                DatePublished = rep.Moca["date_published"] is JsonValue published && published.TryGetValue<string>(out var date) && Dates.Parse(date) is not null ? date : null,
+                // Package spec §5.7: the valid media descriptions, in order.
+                Media = rep.Media.Count > 0 ? [.. rep.Media.Select(d => new CitationMedia(d.Source, d.Resource, d.Type, d.Duration, d.Digest, d.Transcript))] : null,
             },
             Span = new CitationSpan(rep.BodyOffset, rep.BodyOffset + Encoding.UTF8.GetByteCount(body)),
             Text = text,

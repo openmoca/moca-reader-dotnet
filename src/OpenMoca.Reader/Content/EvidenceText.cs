@@ -235,7 +235,17 @@ public static partial class EvidenceText
 
     /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind)"/>, with the source's normalised text
     /// already computed (it is computed once per source and package).</summary>
-    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised)
+    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised) =>
+        CheckSelector(selector, raw, kind, normalised, null);
+
+    /// <summary>A FragmentSelector that conforms to Media Fragments: a time range in audio or video.</summary>
+    public static bool IsMediaTimeRange(JsonNode? selector) =>
+        selector is JsonObject o && JsonValues.StringOf(o["type"]) == "FragmentSelector"
+        && MediaFragments().IsMatch(JsonValues.StringOf(o["conformsTo"]) ?? "");
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?)"/>, with the declared duration of
+    /// the media, which bounds a time range with the latest cue end (Reader contract §7).</summary>
+    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised, double? duration)
     {
         if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
         {
@@ -252,7 +262,25 @@ public static partial class EvidenceText
             }
 
             var (start, end) = range.Value;
-            return WebVtt(raw).Cues.Any(c => start < c.End && end > c.Start);
+            var cues = WebVtt(raw).Cues;
+            if (!cues.Any(c => start < c.End && end > c.Start))
+            {
+                return false;
+            }
+
+            // Contract §7: the range lies within the media, bounded by the latest cue end or the declared duration.
+            if (double.IsPositiveInfinity(end))
+            {
+                return true;
+            }
+
+            var bound = cues.Max(c => c.End);
+            if (duration is { } d && d > bound)
+            {
+                bound = d;
+            }
+
+            return end <= bound;
         }
 
         // The quote is normalised as the source is, so markup in either never decides a match.

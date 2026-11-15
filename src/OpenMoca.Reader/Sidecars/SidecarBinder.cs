@@ -201,7 +201,10 @@ public static class SidecarBinder
             return Fail(index);
         }
 
-        if (JsonValues.StringOf(target["digest"]) != package.Digest)
+        // Sidecar spec §5: an issued copy binds through the original digest it verified with.
+        var targetDigest = JsonValues.StringOf(target["digest"]);
+        var copy = package.IssuedCopy is { } issued && targetDigest == issued.OriginalDigest && targetDigest != package.Digest ? issued : null;
+        if (targetDigest != package.Digest && copy is null)
         {
             diagnostics.Add(DiagnosticCodes.S003SidecarStale, $"sidecar was built for {target["digest"]}; the package is {package.Digest}", ManifestFile);
             return Fail(index);
@@ -230,6 +233,9 @@ public static class SidecarBinder
             }
         }
 
+        // Sidecar spec §5: on an issued copy, the items of changed node files are replaced before they are checked.
+        var changed = new HashSet<string>(copy?.ChangedFiles ?? [], StringComparer.Ordinal);
+        var replaced = new HashSet<int>();
         var lines = Encoding.UTF8.GetString(source.Read(payloadPath)).Split('\n').Where(l => l.Trim().Length > 0).ToList();
         var counts = new Dictionary<string, HashSet<long>>(StringComparer.Ordinal);
         var chunks = new List<SidecarChunk>();
@@ -245,6 +251,15 @@ public static class SidecarBinder
             {
                 diagnostics.Add(DiagnosticCodes.S004SidecarItemInvalid, "payload line is not JSON", payloadPath, i + 1);
                 bad++;
+                continue;
+            }
+
+            if (changed.Count > 0 && item is not null && JsonValues.StringOf(item["path"]) is { } itemPath
+                && representations.TryGetValue($"{itemPath}\u0000{LocaleKey(item["locale"])}", out var target2) && changed.Contains(target2.File))
+            {
+                // A placeholder keeps the vector rows in step with the items.
+                replaced.Add(chunks.Count);
+                chunks.Add(new SidecarChunk { Path = itemPath });
                 continue;
             }
 
@@ -267,7 +282,7 @@ public static class SidecarBinder
             chunks.Add(chunk);
         }
 
-        foreach (var chunk in chunks)
+        foreach (var chunk in chunks.Where((_, i) => !replaced.Contains(i)))
         {
             var seen = counts[$"{chunk.Path}\u0000{chunk.Locale ?? ""}"];
             if (seen.Count != chunk.ChunkCount)
@@ -283,9 +298,50 @@ public static class SidecarBinder
             bad += AttachVectors(source, listed, index, vectors, chunks, lines.Count, diagnostics);
         }
 
+        chunks = [.. chunks.Where((_, i) => !replaced.Contains(i))];
+        if (copy is not null && bad == 0)
+        {
+            var files = 0;
+            foreach (var node in package.Nodes)
+            {
+                foreach (var rep in node.Representations)
+                {
+                    if (!changed.Contains(rep.File))
+                    {
+                        continue;
+                    }
+
+                    files++;
+                    chunks.Add(new SidecarChunk
+                    {
+                        Path = node.Path,
+                        Locale = rep.Locale,
+                        ChunkIndex = 0,
+                        ChunkCount = 1,
+                        Start = rep.BodyOffset,
+                        End = rep.BodyOffset + Encoding.UTF8.GetByteCount(rep.Body),
+                    });
+                }
+            }
+
+            if (files > 0)
+            {
+                diagnostics.Add(DiagnosticCodes.S009SidecarItemsReplaced,
+                    $"bound to an issued copy of {copy.OriginalDigest}; the items of {files} file(s) the issuer changed were replaced by each file's whole body, without a vector", ManifestFile);
+            }
+        }
+
         var usable = bad == 0;
         return new SidecarBinding(usable, index, usable ? chunks : [], diagnostics.Items);
     }
+
+    /// <summary>An item's locale as the representation key spells it: JavaScript's <c>item.locale ?? ''</c> in a template string.</summary>
+    private static string LocaleKey(JsonNode? locale) => locale switch
+    {
+        null => "",
+        JsonValue v when v.TryGetValue<string>(out var s) => s,
+        _ => locale.ToJsonString(),
+    };
 
     private static (SidecarChunk? Chunk, string? Problem) CheckItem(JsonObject? item, Dictionary<string, Representation> representations, JsonObject index)
     {

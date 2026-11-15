@@ -114,7 +114,8 @@ internal static partial class ContentReader
             CheckEvidenceSources(file, frontmatter, diagnostics);
             CheckWindow(file, frontmatter, diagnostics);
             CheckPaths(file, frontmatter, split.Body, files, diagnostics);
-            var evidenceChecks = VerifyEvidence(file, frontmatter, files, bytes, diagnostics, limits, sourceText, budget);
+            var media = MediaDescriptions(file, frontmatter, files, diagnostics);
+            var evidenceChecks = VerifyEvidence(file, frontmatter, files, bytes, diagnostics, limits, sourceText, budget, media);
 
             var representation = new Representation
             {
@@ -125,6 +126,7 @@ internal static partial class ContentReader
                 BodyOffset = split.BodyOffset,
                 Sha256 = fileDigests.GetValueOrDefault(file),
                 EvidenceChecks = evidenceChecks,
+                Media = media,
             };
             if (!byKey.TryGetValue(key, out var node))
             {
@@ -251,6 +253,151 @@ internal static partial class ContentReader
         }
     }
 
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}(?:[ \t]*;[^\n\r]*)?\z")]
+    private static partial Regex MediaType();
+
+    [GeneratedRegex(@"^sha256:[a-f0-9]{64}\z")]
+    private static partial Regex Sha256Digest();
+
+    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript"], StringComparer.Ordinal);
+
+    /// <summary>A finite JSON number, or null.</summary>
+    private static double? NumberOf(JsonNode? node)
+    {
+        if (node is not JsonValue v)
+        {
+            return null;
+        }
+
+        if (v.TryGetValue<double>(out var d) && double.IsFinite(d))
+        {
+            return d;
+        }
+
+        if (v.TryGetValue<long>(out var l))
+        {
+            return l;
+        }
+
+        if (v.TryGetValue<decimal>(out var m))
+        {
+            return (double)m;
+        }
+
+        return null;
+    }
+
+    private static bool WellFormedMedia(JsonNode? node)
+    {
+        if (node is not JsonObject m || m.Any(p => !MediaKeys.Contains(p.Key)))
+        {
+            return false;
+        }
+
+        if (JsonValues.StringOf(m["source"]) is not { Length: > 0 } || JsonValues.StringOf(m["type"]) is not { } type || !MediaType().IsMatch(type))
+        {
+            return false;
+        }
+
+        if (m.ContainsKey("duration") && NumberOf(m["duration"]) is not >= 0)
+        {
+            return false;
+        }
+
+        if (m.ContainsKey("digest") && (JsonValues.StringOf(m["digest"]) is not { } digest || !Sha256Digest().IsMatch(digest)))
+        {
+            return false;
+        }
+
+        return !m.ContainsKey("transcript") || JsonValues.StringOf(m["transcript"]) is { Length: > 0 };
+    }
+
+    /// <summary>The package path of a resource when it is a file under sources/ or media/, or null.</summary>
+    private static string? LocalEvidencePath(string file, string? resource, IReadOnlyDictionary<string, string> files)
+    {
+        if (resource is null || !PathReference().IsMatch(resource))
+        {
+            return null;
+        }
+
+        var (path, escapes) = ResolveReference(file, resource);
+        if (escapes || path is null || !files.ContainsKey(path) || !EvidenceDirectories.Any(d => path.StartsWith(d, StringComparison.Ordinal)))
+        {
+            return null;
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Package spec §5.7: the node's valid media descriptions, in order. A malformed description (already reported by
+    /// the node schema as C005) is ignored; so is one naming an unknown source (C006), or a source already described
+    /// (C005). A transcript that is not a WebVTT file under sources/ or media/ is dropped (C005).
+    /// </summary>
+    private static List<MediaDescription> MediaDescriptions(string file, JsonObject frontmatter, IReadOnlyDictionary<string, string> files, DiagnosticBag diagnostics)
+    {
+        var output = new List<MediaDescription>();
+        if ((frontmatter["moca"] as JsonObject)?["media"] is not JsonArray list)
+        {
+            return output;
+        }
+
+        var sources = SourcesById(frontmatter);
+        var described = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in list)
+        {
+            if (!WellFormedMedia(node))
+            {
+                continue;
+            }
+
+            var m = (JsonObject)node!;
+            var sourceId = JsonValues.StringOf(m["source"])!;
+            if (!sources.TryGetValue(sourceId, out var source))
+            {
+                diagnostics.Add(DiagnosticCodes.C006EvidenceSourceUnknown,
+                    $"media names source \"{sourceId}\", which sources[] does not declare with that id", file);
+                continue;
+            }
+
+            if (JsonValues.StringOf(source["resource"]) is not { } resource)
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media describes source \"{sourceId}\", which has no resource", file);
+                continue;
+            }
+
+            if (!described.Add(sourceId))
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media describes source \"{sourceId}\" twice; the later description is ignored", file);
+                continue;
+            }
+
+            string? transcript = null;
+            string? transcriptPath = null;
+            if (JsonValues.StringOf(m["transcript"]) is { } transcriptId)
+            {
+                var path = sources.TryGetValue(transcriptId, out var t) ? LocalEvidencePath(file, JsonValues.StringOf(t["resource"]), files) : null;
+                if (path is not null && EvidenceText.KindOf(path) == SourceKind.WebVtt)
+                {
+                    transcript = transcriptId;
+                    transcriptPath = path;
+                }
+                else
+                {
+                    diagnostics.Add(DiagnosticCodes.C005FieldInvalid,
+                        $"media transcript \"{transcriptId}\" is not a source with a WebVTT file under sources/ or media/; it is dropped", file);
+                }
+            }
+
+            output.Add(new MediaDescription(sourceId, resource, JsonValues.StringOf(m["type"])!, NumberOf(m["duration"]), JsonValues.StringOf(m["digest"]), transcript)
+            {
+                TranscriptPath = transcriptPath,
+            });
+        }
+
+        return output;
+    }
+
     /// <summary>
     /// Checks each evidence selector against the cited file when that file is inside the package and
     /// checkable (text, Markdown, HTML or WebVTT), after normalisation (Reader contract §7).
@@ -263,7 +410,8 @@ internal static partial class ContentReader
         DiagnosticBag diagnostics,
         ReaderLimits limits,
         Dictionary<string, string> sourceText,
-        EvidenceBudget budget)
+        EvidenceBudget budget,
+        IReadOnlyList<MediaDescription> media)
     {
         if ((frontmatter["moca"] as JsonObject)?["evidence"] is not JsonArray evidence)
         {
@@ -279,14 +427,25 @@ internal static partial class ContentReader
             var resource = sourceId is not null && sources.TryGetValue(sourceId, out var source)
                 ? JsonValues.StringOf(source["resource"])
                 : null;
-            if (resource is null || !PathReference().IsMatch(resource))
+            var path = LocalEvidencePath(file, resource, files);
+
+            // Contract §7: a time range is checked against the cited WebVTT file, or the transcript of the cited media,
+            // and bounded by the media's duration. A time range checked this way is evidence checkable in the package.
+            double? duration = null;
+            if (EvidenceText.IsMediaTimeRange(entry?["selector"]) && (path is null || EvidenceText.KindOf(path) != SourceKind.WebVtt))
             {
-                checks.Add(new EvidenceCheck(false));
-                continue;
+                if (media.FirstOrDefault(d => d.Source == sourceId) is { TranscriptPath: { } transcriptPath } described)
+                {
+                    path = transcriptPath;
+                    duration = described.Duration;
+                }
+            }
+            else if (path is not null && EvidenceText.KindOf(path) == SourceKind.WebVtt)
+            {
+                duration = media.FirstOrDefault(d => d.Transcript is not null && d.Transcript == sourceId)?.Duration;
             }
 
-            var (path, escapes) = ResolveReference(file, resource);
-            if (escapes || path is null || !files.ContainsKey(path) || !EvidenceDirectories.Any(d => path.StartsWith(d, StringComparison.Ordinal)))
+            if (path is null)
             {
                 checks.Add(new EvidenceCheck(false));
                 continue;
@@ -334,7 +493,7 @@ internal static partial class ContentReader
                 }
             }
 
-            var matched = EvidenceText.CheckSelector(selector, text, kind.Value, normalised);
+            var matched = EvidenceText.CheckSelector(selector, text, kind.Value, normalised, duration);
             if (matched == false)
             {
                 diagnostics.Add(DiagnosticCodes.C011EvidenceSelectorUnmatched,

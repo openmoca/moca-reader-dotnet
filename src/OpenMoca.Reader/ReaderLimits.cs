@@ -40,7 +40,7 @@ public sealed record ReaderLimits
     public int MaxMemberDepth { get; init; } = 8;
 
     /// <summary>Members resolved in one read, at every depth; further members are not resolved (package spec §7.1, contract §3).</summary>
-    public int MaxMembers { get; init; } = 256;
+    public int MaxMembers { get; init; } = 4096;
 
     /// <summary>
     /// The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt

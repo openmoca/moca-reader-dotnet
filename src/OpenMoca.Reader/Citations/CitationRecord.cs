@@ -68,7 +68,8 @@ public sealed record CitationPackage(
     [property: JsonPropertyName("digest")] string Digest,
     [property: JsonPropertyName("signed")] bool Signed,
     [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null,
-    [property: JsonPropertyName("issuedCopy")] CitationIssuedCopy? IssuedCopy = null);
+    [property: JsonPropertyName("issuedCopy")] CitationIssuedCopy? IssuedCopy = null,
+    [property: JsonPropertyName("datePublished")] string? DatePublished = null);
 
 /// <summary>An issued copy in a citation record (attestations §7.1): the original digest and the issuers.</summary>
 public sealed record CitationIssuedCopy(
@@ -117,7 +118,24 @@ public sealed record CitationNode
     /// <summary>True when the record comes from a file the issuer of an issued copy changed (attestations §7.1).</summary>
     [JsonPropertyName("issuedChange")]
     public bool? IssuedChange { get; init; }
+
+    /// <summary>The node's own <c>moca.date_published</c>, as written, when it parses (package spec §4.12). Never the package's.</summary>
+    [JsonPropertyName("datePublished")]
+    public string? DatePublished { get; init; }
+
+    /// <summary>The node's valid media descriptions, in order (package spec §5.7).</summary>
+    [JsonPropertyName("media")]
+    public IReadOnlyList<CitationMedia>? Media { get; init; }
 }
+
+/// <summary>A media description in a citation record (package spec §5.7): never fetched by the Reader.</summary>
+public sealed record CitationMedia(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("resource")] string Resource,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("duration")] double? Duration = null,
+    [property: JsonPropertyName("digest")] string? Digest = null,
+    [property: JsonPropertyName("transcript")] string? Transcript = null);
 
 /// <summary>UTF-8 byte offsets into the node file.</summary>
 public sealed record CitationSpan(

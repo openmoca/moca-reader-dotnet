@@ -100,6 +100,7 @@ public static class ConformanceCases
             ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
             ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
             ["readingOrder"] = result.ReadingOrder,
+            ["datePublished"] = result.DatePublished,
             ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
@@ -204,6 +205,15 @@ public static class ConformanceCases
             else
             {
                 await store.IngestAsync(library, cancellationToken);
+            }
+
+            // Members a composed package brought into the library are matched by where their resolver found them.
+            foreach (var p in library.Packages)
+            {
+                if (p.Result.Source?.Location is { } location && !sources.ContainsKey(p.Result.Digest!))
+                {
+                    sources[p.Result.Digest!] = Path.GetFullPath(location);
+                }
             }
 
             var allowPaths = (o["allow"] as JsonArray ?? []).Select(Str).OfType<string>().Select(t => Path.GetFullPath(Path.Combine(root, t))).ToHashSet();
@@ -447,6 +457,8 @@ public static class ConformanceCases
             MaxSourceBytesChecked = Int("maxSourceBytesChecked") ?? d.MaxSourceBytesChecked,
             MaxScryptWorkFactor = Int("maxScryptWorkFactor") ?? d.MaxScryptWorkFactor,
             MaxImageBytes = Int("maxImageBytes") ?? d.MaxImageBytes,
+            MaxMembers = Int("maxMembers") ?? d.MaxMembers,
+            MaxMemberDepth = Int("maxMemberDepth") ?? d.MaxMemberDepth,
         };
     }
 

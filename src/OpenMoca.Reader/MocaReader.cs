@@ -145,6 +145,12 @@ public static partial class MocaReader
                 result.Apps = [.. apps.Select(JsonValues.StringOf).OfType<string>()];
             }
 
+            // Package spec §4.12: informative, as written.
+            if (manifest["datePublished"] is JsonValue published && published.TryGetValue<string>(out var datePublished))
+            {
+                result.DatePublished = datePublished;
+            }
+
             // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
             result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
         }
@@ -515,10 +521,12 @@ public static partial class MocaReader
                     $"member pinned as {memberId}@{reference.Version} resolved to {child.Id}@{child.Version}", PackageDigest.ManifestFile);
                 entry.Status = "mismatch";
             }
-            else if (child.Digest != digest)
+            else if (child.Digest != digest && child.IssuedCopy?.OriginalDigest != digest)
             {
+                // Package spec §7.1: an issued copy matches through the original digest it verified with, and only then.
+                var copy = child.IssuedCopy is null ? "" : $" (an issued copy of {child.IssuedCopy.OriginalDigest})";
                 diagnostics.Add(DiagnosticCodes.R002MemberDigestMismatch,
-                    $"member {memberId}@{reference.Version} has digest {child.Digest ?? "(none)"}, but {digest} is pinned", PackageDigest.ManifestFile);
+                    $"member {memberId}@{reference.Version} has digest {child.Digest ?? "(none)"}{copy}, but {digest} is pinned", PackageDigest.ManifestFile);
                 entry.Status = "mismatch";
             }
             else

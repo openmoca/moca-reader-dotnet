@@ -51,6 +51,11 @@ public sealed partial record PackageState
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OpenMoca.Reader.Structure.ReadingOrder? ReadingOrder { get; init; }
 
+    /// <summary>The bindings by composition (package spec §5.6), when the package binds members, so a store search filters and limits members as a library does.</summary>
+    [JsonPropertyName("composition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<OpenMoca.Reader.Structure.CompositionBinding>? Composition { get; init; }
+
     /// <summary>The state of a valid package result.</summary>
     public static PackageState From(PackageResult result)
     {
@@ -77,6 +82,7 @@ public sealed partial record PackageState
             Contests = contests,
             ReadingOrder = result.ResolvedReadingOrder,
             IssuedCopy = result.IssuedCopy,
+            Composition = OpenMoca.Reader.Structure.Composition.Of(result) is { Count: > 0 } bindings ? bindings : null,
         };
     }
 

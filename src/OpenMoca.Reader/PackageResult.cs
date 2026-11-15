@@ -110,6 +110,9 @@ public sealed class PackageResult
     /// </summary>
     public IssuedCopy? IssuedCopy { get; internal set; }
 
+    /// <summary>Package spec §4.12: when the package was first published, as written; null when the manifest fails its schema or has none. Informative.</summary>
+    public string? DatePublished { get; internal set; }
+
     /// <summary>The resolved reading order, for search (Reader contract §9).</summary>
     internal OpenMoca.Reader.Structure.ReadingOrder? ResolvedReadingOrder { get; set; }
 

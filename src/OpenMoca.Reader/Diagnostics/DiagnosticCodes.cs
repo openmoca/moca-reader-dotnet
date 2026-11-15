@@ -121,6 +121,8 @@ public static class DiagnosticCodes
     public const string R003MemberCycle = "R003_MEMBER_CYCLE";
     /// <summary>A supersedes or conflictsWith relation is not authorised by a signer of the package, so it has no effect.</summary>
     public const string R004RelationUnauthorised = "R004_RELATION_UNAUTHORISED";
+    /// <summary>A relation type is not a core type, and no profile the package declares defines it. It is preserved and has no effect.</summary>
+    public const string R005RelationTypeUnknown = "R005_RELATION_TYPE_UNKNOWN";
 
     // Library
     /// <summary>A library was given a second package with the same id and version but a different digest; the second is refused.</summary>
@@ -159,6 +161,8 @@ public static class DiagnosticCodes
     public const string S007NoVectors = "S007_NO_VECTORS";
     /// <summary>A search's upTo is on no loaded package's reading order, neither a member nor a descendant of one. It limits nothing.</summary>
     public const string S008UpToUnresolved = "S008_UPTO_UNRESOLVED";
+    /// <summary>A sidecar built from the publisher's package is bound to an issued copy; the items of the files the issuer changed were replaced by each file's whole body, without a vector.</summary>
+    public const string S009SidecarItemsReplaced = "S009_SIDECAR_ITEMS_REPLACED";
 
     private static readonly Dictionary<string, DiagnosticSeverity> Severities = new()
     {
@@ -211,6 +215,7 @@ public static class DiagnosticCodes
         [R002MemberDigestMismatch] = DiagnosticSeverity.Error,
         [R003MemberCycle] = DiagnosticSeverity.Error,
         [R004RelationUnauthorised] = DiagnosticSeverity.Info,
+        [R005RelationTypeUnknown] = DiagnosticSeverity.Info,
         [L001IdentityConflict] = DiagnosticSeverity.Error,
         [L002IssuedCopyDuplicate] = DiagnosticSeverity.Info,
         [F001ProfileUnrecognised] = DiagnosticSeverity.Info,
@@ -226,6 +231,7 @@ public static class DiagnosticCodes
         [S006ModelMismatch] = DiagnosticSeverity.Warning,
         [S007NoVectors] = DiagnosticSeverity.Warning,
         [S008UpToUnresolved] = DiagnosticSeverity.Warning,
+        [S009SidecarItemsReplaced] = DiagnosticSeverity.Info,
     };
 
     /// <summary>Every code this Reader can report.</summary>

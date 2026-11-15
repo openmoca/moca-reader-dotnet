@@ -62,4 +62,67 @@ public sealed class IssuedCopyTests
         var check = IssuedCopies.Check(statement, new SignatureCheck("valid", "s", null, [], null), result.Manifest!, result.Digest!, result.FileDigests, true);
         Assert.NotNull(check.Error);
     }
+
+    /// <summary>Sidecar spec §5: the changed file's items are replaced, and later vector rows stay with their own items.</summary>
+    [Fact]
+    public async Task ADenseSidecar_BoundToAnIssuedCopy_KeepsEachVectorWithItsItem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dir = Directory.CreateTempSubdirectory("moca-sidecar-").FullName;
+        var source = Path.Combine(Fixtures, "sidecars", "issued-original");
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(dir, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+
+        var index = (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "index.json")))!;
+        index["indexType"] = "dense";
+        index["model"] = new JsonObject { ["name"] = "test-model", ["dimensions"] = 2 };
+        ((JsonObject)index["storage"]!)["vectors"] = new JsonObject { ["file"] = "payload/vectors.f32", ["dtype"] = "float32", ["dimensions"] = 2 };
+        File.WriteAllText(Path.Combine(dir, "index.json"), index.ToJsonString());
+        // One row per item, in payload order: intro.md, lessons/one.md (changed in the copy), lessons/two.md.
+        float[] rows = [1, 0, 0.5f, 0.5f, 0, 1];
+        var bytes = new byte[rows.Length * 4];
+        for (var i = 0; i < rows.Length; i++)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 4), rows[i]);
+        }
+
+        File.WriteAllBytes(Path.Combine(dir, "payload", "vectors.f32"), bytes);
+        var copy = await MocaReader.ReadPackageAsync(Path.Combine(Fixtures, "issued", "copy-valid"), Options(), ct);
+        var bound = OpenMoca.Reader.Sidecars.SidecarBinder.Bind(dir, copy);
+        Assert.True(bound.Usable);
+        Assert.Equal(["S009_SIDECAR_ITEMS_REPLACED"], bound.Diagnostics.Select(d => d.Code));
+        var byPath = bound.Chunks.ToDictionary(c => c.Path);
+        Assert.Equal([1f, 0f], byPath["intro.md"].Vector!);
+        Assert.Equal([0f, 1f], byPath["lessons/two.md"].Vector!);
+        Assert.Null(byPath["lessons/one.md"].Vector);
+        var rep = copy.Nodes.Single(n => n.Path == "lessons/one.md").Representations[0];
+        Assert.Equal(rep.BodyOffset, byPath["lessons/one.md"].Start);
+        Assert.Equal(rep.BodyOffset + System.Text.Encoding.UTF8.GetByteCount(rep.Body), byPath["lessons/one.md"].End);
+    }
+
+    /// <summary>Reader contract §3: the member limit counts every depth, so a long series needs room.</summary>
+    [Fact]
+    public void MaxMembers_DefaultsTo4096()
+    {
+        Assert.Equal(4096, ReaderLimits.Default.MaxMembers);
+        Assert.Equal(8, ReaderLimits.Default.MaxMemberDepth);
+    }
+
+    /// <summary>Reader contract §9.4: a package state's bindings by composition survive JSON, so a host can keep them.</summary>
+    [Fact]
+    public async Task APackageState_KeepsItsCompositionThroughJson()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var series = Path.Combine(Fixtures, "series");
+        var result = await MocaReader.ReadPackageAsync(Path.Combine(series, "show"), new ReadOptions { ResolveMember = MemberResolvers.Directories([series]) }, ct);
+        var state = PackageState.From(result);
+        Assert.NotNull(state.Composition);
+        var back = JsonSerializer.Deserialize<PackageState>(JsonSerializer.Serialize(state))!;
+        Assert.Equal(JsonSerializer.Serialize(state.Composition), JsonSerializer.Serialize(back.Composition));
+        Assert.Equal(4, back.Composition!.Count); // the season, and the three releases
+    }
 }

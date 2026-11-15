@@ -7,6 +7,13 @@ namespace OpenMoca.Reader.Content;
 /// <param name="Matched">Set only when the selector was checked against that file.</param>
 public sealed record EvidenceCheck(bool Local, bool? Matched = null);
 
+/// <summary>Package spec §5.7: one valid media description, with its source's resource as written.</summary>
+public sealed record MediaDescription(string Source, string Resource, string Type, double? Duration, string? Digest, string? Transcript)
+{
+    /// <summary>The package path of the transcript, when it names one.</summary>
+    internal string? TranscriptPath { get; init; }
+}
+
 /// <summary>One language version of a node (package spec §5.4).</summary>
 public sealed class Representation
 {
@@ -33,6 +40,9 @@ public sealed class Representation
 
     /// <summary>Absolute concept IRIs the node is bound to, set when the package structure is read.</summary>
     public IReadOnlyList<string>? Concepts { get; internal set; }
+
+    /// <summary>Package spec §5.7: the valid media descriptions, in order.</summary>
+    public IReadOnlyList<MediaDescription> Media { get; init; } = [];
 
     /// <summary>The <c>moca</c> mapping, or an empty one.</summary>
     public JsonObject Moca => Frontmatter["moca"] as JsonObject ?? [];
