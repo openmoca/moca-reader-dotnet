@@ -206,31 +206,36 @@ internal static partial class CoreSchemaYaml
     /// </summary>
     private static JsonNode Integer(string text, string digits, int radix)
     {
-        // Exact while it fits 64 bits; past that, a double (linear time, however long the text).
-        ulong exact = 0;
-        var i = 0;
-        for (; i < digits.Length; i++)
+        // Rounded once, correctly, in linear time: the top 64 significant bits are kept in a ulong, with a sticky bit
+        // for any non-zero bit dropped below them; that converts to a double, scaled by the bits dropped.
+        var bitsPerDigit = radix == 8 ? 3 : 4;
+        ulong top = 0;
+        long dropped = 0;
+        var sticky = false;
+        foreach (var c in digits)
         {
-            var d = (ulong)Convert.ToInt32(digits[i].ToString(), 16);
-            if (exact > (ulong.MaxValue - d) / (ulong)radix)
+            var d = Convert.ToInt32(c.ToString(), 16);
+            for (var b = bitsPerDigit - 1; b >= 0; b--)
             {
-                break;
+                var bit = (ulong)((d >> b) & 1);
+                if (top < 1UL << 63)
+                {
+                    top = (top << 1) | bit;
+                }
+                else
+                {
+                    dropped++;
+                    sticky |= bit != 0;
+                }
             }
-
-            exact = (exact * (ulong)radix) + d;
         }
 
-        if (i == digits.Length && exact <= long.MaxValue)
+        if (dropped == 0 && top <= long.MaxValue)
         {
-            return JsonValue.Create((long)exact);
+            return JsonValue.Create((long)top);
         }
 
-        double number = exact;
-        for (; i < digits.Length && double.IsFinite(number); i++)
-        {
-            number = (number * radix) + Convert.ToInt32(digits[i].ToString(), 16);
-        }
-
+        var number = dropped > 2048 ? double.PositiveInfinity : Math.ScaleB((double)(top | (sticky ? 1UL : 0UL)), (int)dropped);
         return double.IsFinite(number) ? JsonValue.Create(number) : NonFinite(text);
     }
 

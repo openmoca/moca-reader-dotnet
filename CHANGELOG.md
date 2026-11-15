@@ -50,8 +50,9 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
   time range checked.
 - An octal or hex integer beyond 64 bits is read as a number, or as `.inf` is when too large for a finite double
   (package spec §5.1); reading it never throws, and `0x8000000000000000` is positive. A number that is not finite
-  may be a mapping key: its text is the key, and the node is read. Schema errors are reported once for each place
-  in the frontmatter.
+  may be a mapping key: its text is the key, and the node is read. An integer beyond 64 bits is rounded once to
+  the nearest double. Schema errors name only the deepest failing places, and of a failing `oneOf` or `anyOf`
+  only the branch that got furthest; a branch of one that passed is never reported.
 
 ### Changed (encrypted packages: hardening)
 
