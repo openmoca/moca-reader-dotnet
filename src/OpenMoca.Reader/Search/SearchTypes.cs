@@ -24,7 +24,15 @@ public sealed record SearchFilters(
     IReadOnlyList<string>? Audiences = null,
     string? Locale = null,
     IReadOnlyList<string>? Concepts = null,
-    bool AllowUnlabelled = false);
+    bool AllowUnlabelled = false)
+{
+    /// <summary>
+    /// The search's own candidate check for what has no pushdown filter: <c>upTo</c>, and concepts bound by
+    /// composition (Reader contract §9.2). A backend that knows it applies it after scoring; others ignore it, and the
+    /// gate still checks every candidate.
+    /// </summary>
+    public Func<SearchHit, bool>? Accept { get; init; }
+}
 
 /// <summary>Backend features (Reader interface §5.2).</summary>
 [Flags]

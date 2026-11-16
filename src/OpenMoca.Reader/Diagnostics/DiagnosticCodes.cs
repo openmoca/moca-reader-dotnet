@@ -164,6 +164,9 @@ public static class DiagnosticCodes
     /// <summary>A sidecar built from the publisher's package is bound to an issued copy; the items of the files the issuer changed were replaced by each file's whole body, without a vector.</summary>
     public const string S009SidecarItemsReplaced = "S009_SIDECAR_ITEMS_REPLACED";
 
+    /// <summary>A search stopped at a bound the host set before limit records passed the gate (contract §9.2).</summary>
+    public const string S010SearchTruncated = "S010_SEARCH_TRUNCATED";
+
     private static readonly Dictionary<string, DiagnosticSeverity> Severities = new()
     {
         [T001TargetNotFound] = DiagnosticSeverity.Error,
@@ -232,6 +235,7 @@ public static class DiagnosticCodes
         [S007NoVectors] = DiagnosticSeverity.Warning,
         [S008UpToUnresolved] = DiagnosticSeverity.Warning,
         [S009SidecarItemsReplaced] = DiagnosticSeverity.Info,
+        [S010SearchTruncated] = DiagnosticSeverity.Warning,
     };
 
     /// <summary>Every code this Reader can report.</summary>

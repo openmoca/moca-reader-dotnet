@@ -15,8 +15,6 @@ namespace OpenMoca.Reader.Search;
 /// </summary>
 public sealed class MocaSearch
 {
-    private const int MaxFetch = 200;
-
     private readonly bool _allowUnsigned;
     private readonly Library? _library;
     private readonly HashSet<string>? _allowed;
@@ -28,6 +26,7 @@ public sealed class MocaSearch
     private readonly bool _allowUnlabelled;
     private readonly SearchHooks _hooks;
     private readonly int _overfetch;
+    private readonly int? _maxCandidates;
 
     /// <summary>A search over a library's loaded packages.</summary>
     public MocaSearch(Library library, ISearchBackend backend, IReadOnlyList<string>? audiences = null, SearchHooks? hooks = null, int overfetch = 3)
@@ -82,6 +81,16 @@ public sealed class MocaSearch
         init => _allowUnlabelled = value;
     }
 
+    /// <summary>
+    /// The host's bound on the candidates one search call examines (Reader contract §9.2, Reader interface §5.1). A call
+    /// it stops before limit records pass the gate reports S010_SEARCH_TRUNCATED. Null (the default) for no bound.
+    /// </summary>
+    public int? MaxCandidates
+    {
+        get => _maxCandidates;
+        init => _maxCandidates = value is null or >= 1 ? value : throw new ArgumentOutOfRangeException(nameof(MaxCandidates), value, "must be at least 1");
+    }
+
     /// <summary>Runs one search; returns citation records with scores, best first unless an egress hook ordered them.</summary>
     public async Task<IReadOnlyList<CitationRecord>> SearchAsync(string query, SearchOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -122,20 +131,45 @@ public sealed class MocaSearch
             };
         }
 
-        var (fetch, filters) = Plan(request, now, index, composition.HasBindings);
-        var hits = await _backend.SearchAsync(effectiveQuery, fetch, filters, cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<CitationRecord> candidates = Resolve(hits, now, index, loaded);
-        if (_hooks.Egress is not null)
+        var (fetch, filters) = Plan(request, caller, now, index, loaded, composition);
+        // Contract §9.2, "Filters come before the limit": ask again, for more each time, until limit records pass the
+        // gate or the backend has no more.
+        for (var size = fetch; ; size = Next(size))
         {
-            var tagged = candidates.Select(r => r with { Retrieval = new CitationRetrieval("search") }).ToList();
-            candidates = await _hooks.Egress(tagged, hookContext with { Request = request }, cancellationToken).ConfigureAwait(false);
-        }
+            var hits = await _backend.SearchAsync(effectiveQuery, size, filters, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<CitationRecord> candidates = Resolve(hits, now, index, loaded);
+            if (_hooks.Egress is not null)
+            {
+                var tagged = candidates.Select(r => r with { Retrieval = new CitationRetrieval("search") }).ToList();
+                candidates = await _hooks.Egress(tagged, hookContext with { Request = request }, cancellationToken).ConfigureAwait(false);
+            }
 
-        return Gate(candidates, caller, loaded, composition);
+            var passed = Gate(candidates, caller, loaded, composition);
+            if (passed.Count >= caller.Limit || hits.Count < size)
+            {
+                return passed.Take(caller.Limit).ToList();
+            }
+
+            if (_maxCandidates is { } max && size >= max)
+            {
+                findings.Add(DiagnosticCodes.S010SearchTruncated, $"stopped at maxCandidates {max} with {passed.Count} of {caller.Limit} records");
+                Diagnostics = findings.Items;
+                return passed;
+            }
+        }
     }
 
-    private (int Fetch, SearchFilters Filters) Plan(SearchOptions request, DateTimeOffset now, RelationIndex index, bool composed)
+    /// <summary>The next, larger request: double, up to the host's bound.</summary>
+    private int Next(int size)
     {
+        var doubled = size > int.MaxValue / 2 ? int.MaxValue : size * 2;
+        return _maxCandidates is { } max ? Math.Min(doubled, max) : doubled;
+    }
+
+    private (int Fetch, SearchFilters Filters) Plan(SearchOptions request, SearchOptions caller, DateTimeOffset now, RelationIndex index,
+        Dictionary<string, PackageResult> loaded, CompositionIndex composition)
+    {
+        var composed = composition.HasBindings;
         var exclude = new List<ExcludedNode>();
         if (!request.IncludeAll && _library is not null)
         {
@@ -156,12 +190,68 @@ public sealed class MocaSearch
         var digests = _library is not null ? _library.Packages.Select(p => p.Result.Digest!).ToList() : [.. _allowed!];
         // Contract §9.5: a record bound by composition carries none of those concepts itself, so the filter is left to
         // the gate when any loaded package binds members.
-        var filters = new SearchFilters(digests, exclude, _audiences, request.Locale, composed ? null : concepts, _allowUnlabelled);
-        // Fetch more than the limit when the gate may drop hits (no pushdown, or upTo, which has no pushdown filter),
-        // or when an egress hook reorders them and needs candidates to choose from.
+        var filters = new SearchFilters(digests, exclude, _audiences, request.Locale, composed ? null : concepts, _allowUnlabelled)
+        {
+            // The search's own candidate check for what has no pushdown filter: upTo, and concepts bound by composition.
+            Accept = AcceptFor(caller, concepts, loaded, composition),
+        };
+        // Ask for more than the limit when the gate may drop hits (no pushdown, or a filter with no pushdown), or when
+        // an egress hook reorders them and needs candidates to choose from. Either way the search asks again while too
+        // few pass (contract §9.2).
         var pushdown = _backend.Features.HasFlag(BackendFeatures.FilterPushdown);
-        var fetch = pushdown && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null) ? request.Limit : Math.Min(request.Limit * _overfetch, MaxFetch);
-        return (fetch, filters);
+        var first = pushdown && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
+            ? request.Limit
+            : (int)Math.Min((long)request.Limit * _overfetch, int.MaxValue);
+        return (Math.Max(1, _maxCandidates is { } max ? Math.Min(first, max) : first), filters);
+    }
+
+    /// <summary>
+    /// The candidate check for upTo and for concepts bound by composition, on a hit before it is resolved: the gate's own
+    /// tests (steps 5.5 and 5.6) on the node's package, path and concepts. Library searches only.
+    /// </summary>
+    private Func<SearchHit, bool>? AcceptFor(SearchOptions caller, IReadOnlyList<string>? concepts, Dictionary<string, PackageResult> loaded,
+        CompositionIndex composition)
+    {
+        if (_library is null)
+        {
+            return null;
+        }
+
+        var upTo = caller.UpTo;
+        var composed = concepts is not null && composition.HasBindings ? concepts.ToHashSet(StringComparer.Ordinal) : null;
+        if (upTo is null && composed is null)
+        {
+            return null;
+        }
+
+        var late = new Dictionary<string, (ReadingOrder Order, HashSet<string> Late)?>(StringComparer.Ordinal);
+        var paths = new Dictionary<string, Dictionary<string, Content.ContentNode>>(StringComparer.Ordinal);
+        var now = _clock();
+        return hit =>
+        {
+            if (!loaded.TryGetValue(hit.Digest, out var result))
+            {
+                return true;
+            }
+
+            if (!paths.TryGetValue(result.Digest!, out var byPath))
+            {
+                paths[result.Digest!] = byPath = result.Nodes.ToDictionary(n => n.Path, StringComparer.Ordinal);
+            }
+
+            if (!byPath.TryGetValue(hit.Path, out var node) || node.Representations.FirstOrDefault(r => r.Locale == hit.Locale) is not { } rep)
+            {
+                return true;
+            }
+
+            var record = Citations.Citations.For(result, node, rep, now, RelationIndex.Empty, "");
+            if (composed is not null && !composition.BoundTo(record, composed))
+            {
+                return false;
+            }
+
+            return upTo is null || PassesUpTo(record, upTo, loaded, composition, late);
+        };
     }
 
     /// <summary>The concepts a record must be bound to: the given concepts, plus a scope and its descendants.</summary>
@@ -279,7 +369,10 @@ public sealed class MocaSearch
         return records;
     }
 
-    /// <summary>The gate (contract §9.2 step 5): always last, whatever the backend and the hooks did.</summary>
+    /// <summary>
+    /// The gate (contract §9.2 step 5): always last, whatever the backend and the hooks did. Every record that passes,
+    /// best first; the caller keeps the limit.
+    /// </summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
         CompositionIndex composition)
     {
@@ -337,7 +430,7 @@ public sealed class MocaSearch
             records = records.OrderByDescending(r => r.Score ?? 0).ToList();
         }
 
-        return records.Take(caller.Limit).ToList();
+        return records;
     }
 
     private static bool LocaleOk(CitationRecord record, string locale, Dictionary<string, PackageResult> loaded)
