@@ -104,7 +104,7 @@ public sealed class IssuedCopyTests
         Assert.Equal(rep.BodyOffset + System.Text.Encoding.UTF8.GetByteCount(rep.Body), byPath["lessons/one.md"].End);
     }
 
-    /// <summary>Reader contract §3: the member limit counts every depth, so a long series needs room.</summary>
+    /// <summary>Reader contract §3: the member limit counts every depth, so a large composite package needs room.</summary>
     [Fact]
     public void MaxMembers_DefaultsTo4096()
     {
@@ -117,12 +117,12 @@ public sealed class IssuedCopyTests
     public async Task APackageState_KeepsItsCompositionThroughJson()
     {
         var ct = TestContext.Current.CancellationToken;
-        var series = Path.Combine(Fixtures, "series");
-        var result = await MocaReader.ReadPackageAsync(Path.Combine(series, "show"), new ReadOptions { ResolveMember = MemberResolvers.Directories([series]) }, ct);
+        var composite = Path.Combine(Fixtures, "composite");
+        var result = await MocaReader.ReadPackageAsync(Path.Combine(composite, "show"), new ReadOptions { ResolveMember = MemberResolvers.Directories([composite]) }, ct);
         var state = PackageState.From(result);
         Assert.NotNull(state.Composition);
         var back = JsonSerializer.Deserialize<PackageState>(JsonSerializer.Serialize(state))!;
         Assert.Equal(JsonSerializer.Serialize(state.Composition), JsonSerializer.Serialize(back.Composition));
-        Assert.Equal(4, back.Composition!.Members.Count); // the season, and the three releases
+        Assert.Equal(4, back.Composition!.Members.Count); // the season, and the three episodes
     }
 }
