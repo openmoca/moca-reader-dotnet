@@ -17,7 +17,11 @@ public sealed record ConceptDetails(
     bool Deprecated,
     IReadOnlyList<string> ReplacedBy,
     IReadOnlyList<string> Replaces,
-    string Layer);
+    string Layer)
+{
+    /// <summary>Alternative labels by language tag, each a list in the order read (package spec §5.6). Empty when none.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> AltLabels { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
+}
 
 /// <summary>
 /// Structure operations over the merged structure of every loaded package plus the host's overlays
@@ -53,7 +57,10 @@ public sealed class StructureIndex
             c.Deprecated,
             Graph.In("replaces", iri).Select(e => e.Iri).ToList(),
             Graph.Out("replaces", iri).Select(e => e.Iri).ToList(),
-            c.Declared.Layer);
+            c.Declared.Layer)
+        {
+            AltLabels = c.AltLabels.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)[.. kv.Value], StringComparer.Ordinal),
+        };
     }
 
     /// <summary>

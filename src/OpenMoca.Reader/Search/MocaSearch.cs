@@ -82,6 +82,15 @@ public sealed class MocaSearch
     }
 
     /// <summary>
+    /// For a store search: the structure source (Reader contract §9.4), a library of packages the host has read (a show
+    /// and its seasons) whose structure the hooks see and <c>scope</c> follows. It adds no records. Ignored for a library
+    /// search, which uses its own library's structure.
+    /// </summary>
+    public Library? StructureSource { get; init; }
+
+    private StructureIndex? Structure => _library?.Structure ?? StructureSource?.Structure;
+
+    /// <summary>
     /// The host's bound on the candidates one search call examines (Reader contract §9.2, Reader interface §5.1). A call
     /// it stops before limit records pass the gate reports S010_SEARCH_TRUNCATED. Null (the default) for no bound.
     /// </summary>
@@ -118,7 +127,7 @@ public sealed class MocaSearch
             ? loaded.Values.Select(r => (r.Digest!, Composition.Of(r)))
             : _states!.Values.Select(s => (s.Digest, s.Composition)));
         var request = caller;
-        var hookContext = new HookContext(request, _library, _library?.Structure, _audiences, now);
+        var hookContext = new HookContext(request, _library, Structure, _audiences, now);
         var effectiveQuery = query;
 
         if (_hooks.Ingress is not null && await _hooks.Ingress(query, hookContext, cancellationToken).ConfigureAwait(false) is { } ingress)
@@ -137,7 +146,7 @@ public sealed class MocaSearch
         for (var size = fetch; ; size = Next(size))
         {
             var hits = await _backend.SearchAsync(effectiveQuery, size, filters, cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<CitationRecord> candidates = Resolve(hits, now, index, loaded);
+            IReadOnlyList<CitationRecord> candidates = Narrow(Resolve(hits, now, index, loaded), request, caller, composition);
             if (_hooks.Egress is not null)
             {
                 var tagged = candidates.Select(r => r with { Retrieval = new CitationRetrieval("search") }).ToList();
@@ -157,6 +166,26 @@ public sealed class MocaSearch
                 return passed;
             }
         }
+    }
+
+    /// <summary>
+    /// Reader contract §9.2, "Ingress narrowing": concepts or a scope an ingress hook set keep only records bound to them,
+    /// by their own concepts or by composition, after the backend and before the egress hook and the gate, on every round.
+    /// </summary>
+    private List<CitationRecord> Narrow(List<CitationRecord> candidates, SearchOptions request, SearchOptions caller, CompositionIndex composition)
+    {
+        if (ReferenceEquals(request.Concepts, caller.Concepts) && request.Scope == caller.Scope)
+        {
+            return candidates;
+        }
+
+        if (ConceptsFor(request) is not { } concepts)
+        {
+            return candidates;
+        }
+
+        var wanted = concepts.ToHashSet(StringComparer.Ordinal);
+        return candidates.Where(r => composition.BoundTo(r, wanted)).ToList();
     }
 
     /// <summary>The next, larger request: double, up to the host's bound.</summary>
@@ -261,7 +290,7 @@ public sealed class MocaSearch
         if (request.Scope is not null)
         {
             set.Add(request.Scope);
-            set.AddRange(_library?.Structure.Descendants(request.Scope) ?? []);
+            set.AddRange(Structure?.Descendants(request.Scope) ?? []);
         }
 
         var distinct = set.Distinct(StringComparer.Ordinal).ToList();

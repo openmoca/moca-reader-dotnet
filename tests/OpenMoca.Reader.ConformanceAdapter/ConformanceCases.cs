@@ -239,7 +239,33 @@ public static class ConformanceCases
             var allowPaths = (o["allow"] as JsonArray ?? []).Select(Str).OfType<string>().Select(t => Path.GetFullPath(Path.Combine(root, t))).ToHashSet();
             var allowedDigests = sources.Where(kv => allowPaths.Contains(kv.Value)).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
             var allowed = library.Packages.Where(p => allowedDigests.Contains(p.Result.Digest!)).Select(p => PackageState.From(p.Result));
-            var mocaSearch = new MocaSearch(allowed, () => now, store, audiences, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true) { AllowUnlabelled = allowUnlabelled };
+            // Contract §9.4: the structure source, packages read into a small library whose structure the hooks see.
+            Library? structure = null;
+            if (o["structure"] is JsonArray structureTargets)
+            {
+                structure = new Library(new LibraryOptions { Clock = () => now, Overlays = overlays });
+                foreach (var t in structureTargets.Select(Str).OfType<string>())
+                {
+                    var r = await MocaReader.ReadPackageAsync(Path.Combine(root, t), readOptions, cancellationToken);
+                    if (r.Valid)
+                    {
+                        structure.Add(r);
+                    }
+                }
+            }
+
+            var storeHooks = Str(o["hooks"]) switch
+            {
+                "hostile" => HostileHooks(),
+                "hostile-ingress" => HostileIngressHooks(),
+                "ontology-guided" => OntologyGuided.Hooks(),
+                _ => null,
+            };
+            var mocaSearch = new MocaSearch(allowed, () => now, store, audiences, storeHooks, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true)
+            {
+                AllowUnlabelled = allowUnlabelled,
+                StructureSource = structure,
+            };
             records = await mocaSearch.SearchAsync(query, options, cancellationToken);
             codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
         }
