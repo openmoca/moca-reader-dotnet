@@ -62,6 +62,9 @@ public sealed class Representation
     /// <summary>Package spec §5.7: the valid media descriptions, in order.</summary>
     public IReadOnlyList<MediaDescription> Media { get; init; } = [];
 
+    /// <summary>Package spec §4.13: the node's own credits, when they match the node schema; null otherwise.</summary>
+    public IReadOnlyList<Contributor>? Contributors { get; init; }
+
     /// <summary>The <c>moca</c> mapping, or an empty one.</summary>
     public JsonObject Moca => Frontmatter["moca"] as JsonObject ?? [];
 }

@@ -126,6 +126,10 @@ public sealed record CitationNode
     /// <summary>The node's valid media descriptions, in order (package spec §5.7).</summary>
     [JsonPropertyName("media")]
     public IReadOnlyList<CitationMedia>? Media { get; init; }
+
+    /// <summary>The node's own <c>moca.contributors</c>, as written, when they match the node schema (package spec §4.13). Never the package's.</summary>
+    [JsonPropertyName("contributors")]
+    public IReadOnlyList<Contributor>? Contributors { get; init; }
 }
 
 /// <summary>A media description in a citation record (package spec §5.7): never fetched by the Reader.</summary>

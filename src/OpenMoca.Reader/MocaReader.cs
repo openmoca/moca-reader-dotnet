@@ -576,6 +576,9 @@ public static partial class MocaReader
             result.Images = catalogue.Images;
             result.Translations = catalogue.Translations;
             result.Tags = catalogue.Tags;
+            result.Publisher = catalogue.Publisher;
+            result.Url = catalogue.Url;
+            result.Contributors = catalogue.Contributors;
         }
 
         var capabilities = new SortedSet<string>(StringComparer.Ordinal) { "core" };
