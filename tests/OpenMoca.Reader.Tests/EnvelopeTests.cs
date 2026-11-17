@@ -10,6 +10,11 @@ using Xunit;
 namespace OpenMoca.Reader.Tests;
 
 /// <summary>Encrypted packages: what the corpus cannot show. The same tests as moca-reader-typescript's test/envelope.test.js.</summary>
+/// <remarks>
+/// One test points the process-wide TMPDIR at a folder that cannot be written to, so these tests run on their own,
+/// never beside another class that makes a temporary folder.
+/// </remarks>
+[Collection(ProcessEnvironment.Name)]
 public sealed partial class EnvelopeTests
 {
     private static string Envelopes => Path.Combine(MocaSpec.Conformance, "fixtures", "envelopes");
