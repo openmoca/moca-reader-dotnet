@@ -1,0 +1,8 @@
+corpus/
+corpus-files/
+kept-*/
+crash-*
+timeout-*
+oom-*
+slow-unit-*
+out/
