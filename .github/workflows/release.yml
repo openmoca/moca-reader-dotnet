@@ -1,0 +1,78 @@
+name: Release
+
+# Push a vX.Y.Z tag on a commit in main: packs every package in src/ and publishes them to NuGet,
+# OpenMoca.Reader first, then the packages that depend on it. On a pull request to main, the same packages are
+# packed and kept as an artifact, so the release path is proved before release day; nothing is published.
+#
+# Trusted publishing: nuget.org accepts this workflow, in the `release` environment, through a short-lived
+# OIDC token from GitHub Actions, and gives it an API key that lasts one hour. There is no NuGet API key in
+# this repository. NUGET_USER is the nuget.org profile name that owns the packages; it is not a credential.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: Check and pack (dry run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tag is on main and matches the version
+        if: github.event_name == 'push'
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Directory.Build.props)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::src/Directory.Build.props is $version, the tag is $GITHUB_REF_NAME"; exit 1; }
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Pack
+        run: |
+          dotnet pack src/OpenMoca.Reader -c Release -o nupkg/reader
+          for p in src/OpenMoca.Reader.*/; do
+            dotnet pack "$p" -c Release -o nupkg/bindings
+          done
+          ls nupkg/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: nupkg/
+
+  publish:
+    name: Publish to NuGet
+    needs: pack
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: nupkg/
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      # Ask for the key just before pushing: it lasts one hour.
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish OpenMoca.Reader
+        run: dotnet nuget push "nupkg/reader/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+      - name: Publish the packages that depend on it
+        run: dotnet nuget push "nupkg/bindings/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}

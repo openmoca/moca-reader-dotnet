@@ -5,7 +5,7 @@ using Json.Schema;
 namespace OpenMoca.Reader.Json;
 
 /// <summary>The spec's JSON Schemas (<c>schemas/v1</c>), embedded, and validation against them.</summary>
-public static class MocaSchemas
+public static partial class MocaSchemas
 {
     /// <summary>Schema names, as in <c>schemas/v1/&lt;name&gt;.schema.json</c>.</summary>
     public const string Manifest = "manifest";
@@ -31,11 +31,14 @@ public static class MocaSchemas
     /// <summary>The derived structure view.</summary>
     public const string Structure = "structure";
 
+    /// <summary>An envelope's moca-enc.json (encrypted packages §3).</summary>
+    public const string MocaEnc = "moca-enc";
+
     private static readonly Lazy<Dictionary<string, JsonSchema>> Schemas = new(Load);
 
     private static readonly EvaluationOptions Options = new()
     {
-        OutputFormat = OutputFormat.List,
+        OutputFormat = OutputFormat.Hierarchical,
         // ajv-formats in the reference Reader checks formats (date, date-time); so do we.
         RequireFormatValidation = true,
     };
@@ -61,32 +64,84 @@ public static class MocaSchemas
             return [];
         }
 
+        // Only the deepest failing places: a nested schema repeats its failure at every level above it. Of the
+        // failing branches of a oneOf or anyOf, only the one that got furthest into the value is reported.
         var errors = new List<string>();
-        foreach (var detail in (results.Details ?? []).Prepend(results))
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (where, message) in Failures(results))
         {
-            if (detail.Errors is null)
+            var text = $"{(where.Length > 0 ? where : "(root)")} {message}";
+            if (seen.Add(text))
             {
-                continue;
-            }
-
-            var where = detail.InstanceLocation.ToString();
-            foreach (var error in detail.Errors.Values)
-            {
-                var message = $"{(where.Length > 0 ? where : "(root)")} {error}";
-                if (!errors.Contains(message))
-                {
-                    errors.Add(message);
-                }
+                errors.Add(text);
             }
         }
 
         return errors.Count > 0 ? errors : ["(root) does not match the schema"];
     }
 
+    // Keywords whose error only says that a subschema below failed; that failure is reported where it happened.
+    private static readonly HashSet<string> Summaries = new(StringComparer.Ordinal)
+    {
+        "properties", "patternProperties", "additionalProperties", "items", "prefixItems", "contains", "allOf", "anyOf",
+        "oneOf", "not", "$ref", "$dynamicRef", "if", "then", "else", "dependentSchemas", "propertyNames",
+        "unevaluatedProperties", "unevaluatedItems",
+    };
+
+    // A oneOf or anyOf branch at the end of an evaluation path: the keyword and the branch's index.
+    [System.Text.RegularExpressions.GeneratedRegex(@"/(oneOf|anyOf)/(\d+)$")]
+    private static partial System.Text.RegularExpressions.Regex Branch();
+
+    /// <summary>The deepest failing places below a failing node, as (instance location, message).</summary>
+    private static List<(string Where, string Message)> Failures(EvaluationResults node)
+    {
+        var below = (node.Details ?? []).Where(d => !d.IsValid).ToList();
+        var output = new List<(string Where, string Message)>();
+        var own = node.Errors ?? new Dictionary<string, string>();
+
+        // Branches of a combinator are reported only when the combinator itself failed, and then only one of them.
+        var branches = below
+            .Select(d => (Detail: d, Match: Branch().Match(d.EvaluationPath.ToString())))
+            .Where(x => x.Match.Success)
+            .ToList();
+        var others = below.Except(branches.Select(x => x.Detail)).ToList();
+        foreach (var combinator in branches.GroupBy(x => x.Match.Groups[1].Value, StringComparer.Ordinal))
+        {
+            if (!own.ContainsKey(combinator.Key))
+            {
+                continue;
+            }
+
+            var chosen = combinator
+                .Select(x => (x.Match, Found: Failures(x.Detail)))
+                .OrderByDescending(x => x.Found.Count == 0 ? -1 : x.Found.Max(f => f.Where.Count(c => c == '/')))
+                .ThenBy(x => int.Parse(x.Match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture))
+                .First();
+            output.AddRange(chosen.Found);
+        }
+
+        foreach (var d in others)
+        {
+            output.AddRange(Failures(d));
+        }
+
+        var where = node.InstanceLocation.ToString();
+        foreach (var (keyword, message) in own)
+        {
+            // A summary keyword says only that something below failed; keep it when nothing below was reported.
+            if (!Summaries.Contains(keyword) || output.Count == 0)
+            {
+                output.Add((where, message));
+            }
+        }
+
+        return output;
+    }
+
     private static Dictionary<string, JsonSchema> Load()
     {
         // Each schema gets its own registry, so loading twice (tests, several readers) never collides.
-        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure];
+        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure, MocaEnc];
         return names.ToDictionary(
             n => n,
             n => JsonSchema.FromText(Text(n), new BuildOptions { SchemaRegistry = new SchemaRegistry() }));

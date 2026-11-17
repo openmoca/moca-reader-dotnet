@@ -17,7 +17,7 @@
     <!-- dotNetRdf.Core depends on AngleSharp for HTML parsing we don't use.
          Pinned above its transitive floor to clear GHSA-pgww-w46g-26qg. -->
     <PackageVersion Include="AngleSharp" Version="1.8.6" />
-    <!-- Ed25519 for DSSE attestations: .NET has no built-in Ed25519. -->
+    <!-- Ed25519 for DSSE attestations (.NET has no built-in Ed25519), and age in OpenMoca.Reader.Age. -->
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
   </ItemGroup>
 

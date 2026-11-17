@@ -112,6 +112,13 @@ internal static partial class CoreSchemaYaml
     [GeneratedRegex(@"^\.(?:nan|NaN|NAN)\z")]
     private static partial Regex NanPattern();
 
+    /// <summary>
+    /// Package spec §5.1: JSON has no infinity or NaN, so .inf, .nan and numbers too large to be finite are kept as a
+    /// marker that is neither a number nor a string: the schemas fail it wherever they want either (C005), and nothing
+    /// reads it as an id, a duration or any other value.
+    /// </summary>
+    private static JsonObject NonFinite(string text) => new() { ["$nonFinite"] = text };
+
     public static JsonNode? Parse(string yaml)
     {
         var parser = new Parser(new StringReader(yaml));
@@ -169,6 +176,8 @@ internal static partial class CoreSchemaYaml
                 {
                     null => "null",
                     JsonValue v => v.ToJsonString().Trim('"'),
+                    // A non-finite number as a key (.inf, 1e400) keeps the scalar's own text.
+                    JsonObject o when o["$nonFinite"] is JsonValue text => text.GetValue<string>(),
                     _ => throw new YamlException(keyEvent.Start, keyEvent.End, "mapping keys must be scalars"),
                 };
                 if (key is JsonValue sv && sv.TryGetValue<string>(out var s))
@@ -189,6 +198,45 @@ internal static partial class CoreSchemaYaml
 
         var unexpected = parser.Current!;
         throw new YamlException(unexpected.Start, unexpected.End, $"unexpected YAML event {unexpected.GetType().Name}");
+    }
+
+    /// <summary>
+    /// An octal or hex integer of any length. It is a whole number when it fits 64 bits, a double when it fits a finite
+    /// double, and otherwise non-finite, as 1e400 is (package spec §5.1).
+    /// </summary>
+    private static JsonNode Integer(string text, string digits, int radix)
+    {
+        // Rounded once, correctly, in linear time: the top 64 significant bits are kept in a ulong, with a sticky bit
+        // for any non-zero bit dropped below them; that converts to a double, scaled by the bits dropped.
+        var bitsPerDigit = radix == 8 ? 3 : 4;
+        ulong top = 0;
+        long dropped = 0;
+        var sticky = false;
+        foreach (var c in digits)
+        {
+            var d = Convert.ToInt32(c.ToString(), 16);
+            for (var b = bitsPerDigit - 1; b >= 0; b--)
+            {
+                var bit = (ulong)((d >> b) & 1);
+                if (top < 1UL << 63)
+                {
+                    top = (top << 1) | bit;
+                }
+                else
+                {
+                    dropped++;
+                    sticky |= bit != 0;
+                }
+            }
+        }
+
+        if (dropped == 0 && top <= long.MaxValue)
+        {
+            return JsonValue.Create((long)top);
+        }
+
+        var number = dropped > 2048 ? double.PositiveInfinity : Math.ScaleB((double)(top | (sticky ? 1UL : 0UL)), (int)dropped);
+        return double.IsFinite(number) ? JsonValue.Create(number) : NonFinite(text);
     }
 
     private static JsonNode? ResolveScalar(Scalar scalar)
@@ -217,23 +265,23 @@ internal static partial class CoreSchemaYaml
 
         if (IntOctal().IsMatch(value))
         {
-            return JsonValue.Create(Convert.ToInt64(value[2..], 8));
+            return Integer(value, value[2..], 8);
         }
 
         if (IntHex().IsMatch(value))
         {
-            return JsonValue.Create(Convert.ToInt64(value[2..], 16));
+            return Integer(value, value[2..], 16);
         }
 
         if (FloatPattern().IsMatch(value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
         {
-            return JsonValue.Create(number);
+            // Package spec §5.1: a number too large to be finite, such as 1e400, is read as .inf is.
+            return double.IsFinite(number) ? JsonValue.Create(number) : NonFinite(value);
         }
 
-        // JSON has no infinity or NaN; keep them as their text rather than failing the node.
         if (InfPattern().IsMatch(value) || NanPattern().IsMatch(value))
         {
-            return JsonValue.Create(value);
+            return NonFinite(value);
         }
 
         return JsonValue.Create(value);

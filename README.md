@@ -55,8 +55,9 @@ asks:
 | | |
 | --- | --- |
 | Class | Reader |
-| Contract version | 0.6.0 |
+| Contract version | 0.7.0 |
 | Implemented | Archives, host sources, DSSE attestations, sidecars (lexical and dense), the ontology profile |
+| Encryption | With the `OpenMoca.Reader.Age` package (`ReadOptions.EnvelopeDecryptor = AgeEnvelopeDecryptor.Instance`, plus a `KeyProvider`). Without it, an envelope is recognised and reported with `E001`, and nothing inside it is exposed. Decrypted bytes stay in memory |
 | Sigstore | Offline only, with the `OpenMoca.Reader.Sigstore` package (`ReadOptions.SigstoreVerifier = new SigstoreVerifier()`), against the trust root's `sigstore.trustedRoot`. Without the package, or without a trusted root, a `*.sigstore.json` attestation is unverifiable (`A003`). There is no online mode: refresh the trusted root yourself (moca-spec attestations §6) |
 
 ```csharp
@@ -87,6 +88,7 @@ Separate packages, each a thin adapter over the Reader
 | `OpenMoca.Reader.Onnx` | `OnnxEmbedder` and `ModelStore`: MOCA's four standard embedding models run locally, as the Reader's embedder, matching indexes built with `moca-index --model` exactly |
 | `OpenMoca.Reader.Extensions.AI` | `EmbeddingGeneratorEmbedder`: any Microsoft.Extensions.AI embedding generator as the Reader's embedder |
 | `OpenMoca.Reader.AgentFramework` | `MocaContextProvider`: grounds a Microsoft Agent Framework agent in your packages each turn, and offers `moca_search`, `moca_get_node` and `moca_structure`, as moca-mcp names them |
+| `OpenMoca.Reader.Age` | `AgeEnvelopeDecryptor`: opens encrypted packages (moca-spec encrypted packages). Decrypt-only age v1 on BouncyCastle: X25519 and scrypt recipients, no plugins. Keys come from the host's `ReadOptions.KeyProvider`; `SidecarBinder.BindEnvelopeAsync` opens an envelope's `index.age` the same way |
 | `OpenMoca.Reader.Sigstore` | `SigstoreVerifier`: verifies Sigstore-signed attestations offline against the host's trusted root: certificate chain, certificate-transparency timestamp, transparency-log entry and checkpoint, and the DSSE signature. No dependency beyond .NET |
 | `OpenMoca.Reader.VectorData` | `VectorStoreBackend<TKey>`: a store backend over any Microsoft.Extensions.VectorData collection, with the Reader's scores and retrieval policy |
 
@@ -192,10 +194,12 @@ node tests/OpenMoca.Reader.Parity/parity.mjs
 2. Point the `MOCA_*_REF` pins in `.github/workflows/test.yml` at the release tags
    ([moca-spec docs/releasing.md](https://github.com/openmoca/moca-spec/blob/main/docs/releasing.md#moving-the-pins)).
 3. The tests pass.
-4. Tag `vX.Y.Z` and publish a GitHub release whose notes are the changelog
-   section.
-5. `dotnet pack -c Release` from the tagged commit, and publish the four
-   packages to NuGet: `OpenMoca.Reader` first, then its bindings.
+4. Merge to main, tag `vX.Y.Z` on main and push the tag. The release workflow
+   (`.github/workflows/release.yml`) checks that the tag matches the version,
+   packs every package in `src/`, and publishes them to NuGet through trusted
+   publishing: `OpenMoca.Reader` first, then the packages that depend on it.
+   No NuGet API key is kept anywhere.
+5. Publish a GitHub release whose notes are the changelog section.
 
 ## Licence
 

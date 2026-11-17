@@ -12,6 +12,9 @@ namespace OpenMoca.Reader.Search;
 /// best-scoring one for each node is returned.
 /// Each document's term counts are kept per package digest after its first search, so later searches only score;
 /// they are dropped when the package leaves the library. Scores are the same as counting afresh.
+/// Contract §9.2: filters remove records, they never change a score. BM25 counts every representation of every loaded
+/// package, then the filters apply, so a record scores the same whether or not a filter was pushed down. The search's
+/// own candidate check (<see cref="SearchFilters.Accept"/>) is applied the same way: after scoring.
 /// </summary>
 public sealed class LexicalBackend(Library library) : ISearchBackend
 {
@@ -28,7 +31,7 @@ public sealed class LexicalBackend(Library library) : ISearchBackend
     {
         var excluded = filters.Exclude.Select(x => $"{x.Digest} {x.Node}").ToHashSet(StringComparer.Ordinal);
         var digests = filters.Digests.ToHashSet(StringComparer.Ordinal);
-        var docs = new List<(SearchHit Item, Bm25.TermCounts Counts, string Key)>();
+        var docs = new List<((SearchHit Hit, Content.ContentNode Node, Content.Representation Rep) Item, Bm25.TermCounts Counts, string Key)>();
         foreach (var gone in _counts.Keys.Except(library.Packages.Select(p => p.Result.Digest!)))
         {
             _counts.TryRemove(gone, out _);
@@ -43,28 +46,6 @@ public sealed class LexicalBackend(Library library) : ISearchBackend
 
             var counted = _counts.GetOrAdd(result.Digest!, _ => new ConcurrentDictionary<string, Bm25.TermCounts>(StringComparer.Ordinal));
 
-            string? Keep(Content.ContentNode node, Content.Representation rep)
-            {
-                var id = $"{result.Id}#{node.Path}";
-                if (excluded.Contains($"{result.Digest} {id}"))
-                {
-                    return null;
-                }
-
-                var (label, invalid) = Audience.Of(node, rep);
-                if (!Audience.Allowed(label, invalid, filters.Audiences, filters.AllowUnlabelled))
-                {
-                    return null;
-                }
-
-                if (filters.Concepts is not null && !(rep.Concepts ?? []).Any(filters.Concepts.Contains))
-                {
-                    return null;
-                }
-
-                return id;
-            }
-
             if (chunks is not null)
             {
                 var byPath = result.Nodes.ToDictionary(n => n.Path, StringComparer.Ordinal);
@@ -75,35 +56,21 @@ public sealed class LexicalBackend(Library library) : ISearchBackend
                         continue;
                     }
 
-                    if (filters.Locale is not null && Citations.Citations.PickRepresentation(node, filters.Locale) != rep)
-                    {
-                        continue;
-                    }
-
-                    if (Keep(node, rep) is not { } id)
-                    {
-                        continue;
-                    }
-
+                    var id = $"{result.Id}#{node.Path}";
                     var key = $"{id}\u0000{c.Start:D12}";
                     // The cache key adds the locale: chunks of two representations can start at the same offset.
                     var counts = counted.GetOrAdd($"{key}\u0000{c.Locale}", _ =>
                         Bm25.Count($"{JsonValues.StringOf(rep.Frontmatter["title"]) ?? ""} {Sidecars.SidecarBinder.ChunkText(c, rep)}"));
-                    docs.Add((new SearchHit(result.Digest!, id, node.Path, rep.Locale, new CitationSpan(c.Start, c.End), 0), counts, key));
+                    docs.Add(((new SearchHit(result.Digest!, id, node.Path, rep.Locale, new CitationSpan(c.Start, c.End), 0), node, rep), counts, key));
                 }
             }
             else
             {
                 foreach (var node in result.Nodes)
                 {
-                    var reps = filters.Locale is not null ? [Citations.Citations.PickRepresentation(node, filters.Locale)] : node.Representations;
-                    foreach (var rep in reps)
+                    foreach (var rep in node.Representations)
                     {
-                        if (Keep(node, rep) is not { } id)
-                        {
-                            continue;
-                        }
-
+                        var id = $"{result.Id}#{node.Path}";
                         var key = $"{id}\u0000{rep.Locale ?? ""}";
                         var counts = counted.GetOrAdd(key, _ =>
                         {
@@ -117,18 +84,45 @@ public sealed class LexicalBackend(Library library) : ISearchBackend
                             parts.Add(rep.Body);
                             return Bm25.Count(string.Join(' ', parts.OfType<string>()));
                         });
-                        docs.Add((new SearchHit(result.Digest!, id, node.Path, rep.Locale, null, 0), counts, key));
+                        docs.Add(((new SearchHit(result.Digest!, id, node.Path, rep.Locale, null, 0), node, rep), counts, key));
                     }
                 }
             }
         }
 
+        bool Passes(SearchHit hit, Content.ContentNode node, Content.Representation rep)
+        {
+            if (excluded.Contains($"{hit.Digest} {hit.Node}"))
+            {
+                return false;
+            }
+
+            if (filters.Locale is not null && Citations.Citations.PickRepresentation(node, filters.Locale) != rep)
+            {
+                return false;
+            }
+
+            var (label, invalid) = Audience.Of(node, rep);
+            if (!Audience.Allowed(label, invalid, filters.Audiences, filters.AllowUnlabelled))
+            {
+                return false;
+            }
+
+            if (filters.Concepts is not null && !(rep.Concepts ?? []).Any(filters.Concepts.Contains))
+            {
+                return false;
+            }
+
+            return filters.Accept is null || filters.Accept(hit);
+        }
+
         // Node ids repeat across versions of a package, so key on the digest too.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlyList<SearchHit> hits = Bm25.RankCounted(docs, query)
-            .Where(r => r.Item.Span is not null || seen.Add($"{r.Item.Digest} {r.Item.Node}"))
+            .Where(r => Passes(r.Item.Hit, r.Item.Node, r.Item.Rep))
+            .Where(r => r.Item.Hit.Span is not null || seen.Add($"{r.Item.Hit.Digest} {r.Item.Hit.Node}"))
             .Take(limit)
-            .Select(r => r.Item with { Score = r.Score })
+            .Select(r => r.Item.Hit with { Score = r.Score })
             .ToList();
         return ValueTask.FromResult(hits);
     }

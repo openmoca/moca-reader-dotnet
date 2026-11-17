@@ -41,11 +41,21 @@ public static class DiagnosticCodes
     public const string M008DigestV1Package = "M008_DIGEST_V1_PACKAGE";
     /// <summary>The package was written for a newer mocaVersion than this Reader implements; it is read on a best-effort basis.</summary>
     public const string M009MocaVersionNewer = "M009_MOCA_VERSION_NEWER";
+    /// <summary>A manifest image is missing, over maxImageBytes, or does not start with the signature of its type. It is left out of the result.</summary>
+    public const string M010ImageInvalid = "M010_IMAGE_INVALID";
+    /// <summary>A key of translations is not a tag in locales.</summary>
+    public const string M011TranslationLocaleUndeclared = "M011_TRANSLATION_LOCALE_UNDECLARED";
+    /// <summary>Two tags in one list are equal, compared case-insensitively. The repeat is dropped.</summary>
+    public const string M012TagDuplicate = "M012_TAG_DUPLICATE";
+    /// <summary>A translated alt text names no image in images. It is dropped.</summary>
+    public const string M013AltImageUnknown = "M013_ALT_IMAGE_UNKNOWN";
+    /// <summary>readingOrder does not name an ordered collection with a member list in the package's own structure.ttl. It is ignored.</summary>
+    public const string M014ReadingOrderUnresolved = "M014_READING_ORDER_UNRESOLVED";
 
     // Content (OKF bundle rules plus MOCA extensions)
     /// <summary>A concept document has no YAML frontmatter (OKF MUST).</summary>
     public const string C001FrontmatterMissing = "C001_FRONTMATTER_MISSING";
-    /// <summary>Frontmatter is not parseable YAML or is not a mapping.</summary>
+    /// <summary>Frontmatter is not parseable YAML, is not a mapping, repeats a key, uses an alias, or lists two sources with one <c>id</c>.</summary>
     public const string C002FrontmatterInvalid = "C002_FRONTMATTER_INVALID";
     /// <summary>Frontmatter has no non-empty type (OKF MUST).</summary>
     public const string C003TypeMissing = "C003_TYPE_MISSING";
@@ -65,6 +75,24 @@ public static class DiagnosticCodes
     public const string C010ValidityWindowInvalid = "C010_VALIDITY_WINDOW_INVALID";
     /// <summary>An evidence selector does not match the text source file it cites inside the package.</summary>
     public const string C011EvidenceSelectorUnmatched = "C011_EVIDENCE_SELECTOR_UNMATCHED";
+
+    /// <summary>An envelope was not opened: no key provider or decryptor, or no key it can use (encrypted packages §5.1).</summary>
+    public const string E001EncryptedNoKey = "E001_ENCRYPTED_NO_KEY";
+
+    /// <summary>A key was supplied for an envelope, but it is not a valid key, unwrapping failed, or the header MAC failed.</summary>
+    public const string E002DecryptionFailed = "E002_DECRYPTION_FAILED";
+
+    /// <summary>An envelope's encrypted payload failed authentication or was truncated.</summary>
+    public const string E003PayloadCorrupt = "E003_PAYLOAD_CORRUPT";
+
+    /// <summary>An envelope's outline differs from the decrypted manifest or structure.</summary>
+    public const string E004OutlineMismatch = "E004_OUTLINE_MISMATCH";
+
+    /// <summary>An envelope's entries or moca-enc.json are invalid.</summary>
+    public const string E005EnvelopeInvalid = "E005_ENVELOPE_INVALID";
+
+    /// <summary>An envelope's age header is malformed, unsupported or over a limit.</summary>
+    public const string E006AgeHeaderInvalid = "E006_AGE_HEADER_INVALID";
 
     // Attestations
     /// <summary>An attestation file is not a parseable envelope and statement.</summary>
@@ -93,10 +121,14 @@ public static class DiagnosticCodes
     public const string R003MemberCycle = "R003_MEMBER_CYCLE";
     /// <summary>A supersedes or conflictsWith relation is not authorised by a signer of the package, so it has no effect.</summary>
     public const string R004RelationUnauthorised = "R004_RELATION_UNAUTHORISED";
+    /// <summary>A relation type is not a core type, and no profile the package declares defines it. It is preserved and has no effect.</summary>
+    public const string R005RelationTypeUnknown = "R005_RELATION_TYPE_UNKNOWN";
 
     // Library
     /// <summary>A library was given a second package with the same id and version but a different digest; the second is refused.</summary>
     public const string L001IdentityConflict = "L001_IDENTITY_CONFLICT";
+    /// <summary>A library was given a second issued copy of the same original. The second is not loaded.</summary>
+    public const string L002IssuedCopyDuplicate = "L002_ISSUED_COPY_DUPLICATE";
 
     // Profiles
     /// <summary>A declared profile is not recognised by this reader.</summary>
@@ -127,6 +159,13 @@ public static class DiagnosticCodes
     public const string S006ModelMismatch = "S006_MODEL_MISMATCH";
     /// <summary>A loaded package has no vectors a dense backend can search; that package is not searched.</summary>
     public const string S007NoVectors = "S007_NO_VECTORS";
+    /// <summary>A search's upTo is on no loaded package's reading order, neither a member nor a descendant of one. It limits nothing.</summary>
+    public const string S008UpToUnresolved = "S008_UPTO_UNRESOLVED";
+    /// <summary>A sidecar built from the publisher's package is bound to an issued copy; the items of the files the issuer changed were replaced by each file's whole body, without a vector.</summary>
+    public const string S009SidecarItemsReplaced = "S009_SIDECAR_ITEMS_REPLACED";
+
+    /// <summary>A search stopped at a bound the host set before limit records passed the gate (contract §9.2).</summary>
+    public const string S010SearchTruncated = "S010_SEARCH_TRUNCATED";
 
     private static readonly Dictionary<string, DiagnosticSeverity> Severities = new()
     {
@@ -145,6 +184,11 @@ public static class DiagnosticCodes
         [M007UnregisteredUrn] = DiagnosticSeverity.Info,
         [M008DigestV1Package] = DiagnosticSeverity.Info,
         [M009MocaVersionNewer] = DiagnosticSeverity.Warning,
+        [M010ImageInvalid] = DiagnosticSeverity.Warning,
+        [M011TranslationLocaleUndeclared] = DiagnosticSeverity.Error,
+        [M012TagDuplicate] = DiagnosticSeverity.Warning,
+        [M013AltImageUnknown] = DiagnosticSeverity.Warning,
+        [M014ReadingOrderUnresolved] = DiagnosticSeverity.Warning,
         [C001FrontmatterMissing] = DiagnosticSeverity.Error,
         [C002FrontmatterInvalid] = DiagnosticSeverity.Error,
         [C003TypeMissing] = DiagnosticSeverity.Error,
@@ -156,6 +200,12 @@ public static class DiagnosticCodes
         [C009LocaleOrphan] = DiagnosticSeverity.Warning,
         [C010ValidityWindowInvalid] = DiagnosticSeverity.Warning,
         [C011EvidenceSelectorUnmatched] = DiagnosticSeverity.Warning,
+        [E001EncryptedNoKey] = DiagnosticSeverity.Error,
+        [E002DecryptionFailed] = DiagnosticSeverity.Error,
+        [E003PayloadCorrupt] = DiagnosticSeverity.Error,
+        [E004OutlineMismatch] = DiagnosticSeverity.Error,
+        [E005EnvelopeInvalid] = DiagnosticSeverity.Error,
+        [E006AgeHeaderInvalid] = DiagnosticSeverity.Error,
         [A001AttestationMalformed] = DiagnosticSeverity.Error,
         [A002AttestationInvalid] = DiagnosticSeverity.Error,
         [A003AttestationUnverifiable] = DiagnosticSeverity.Warning,
@@ -168,7 +218,9 @@ public static class DiagnosticCodes
         [R002MemberDigestMismatch] = DiagnosticSeverity.Error,
         [R003MemberCycle] = DiagnosticSeverity.Error,
         [R004RelationUnauthorised] = DiagnosticSeverity.Info,
+        [R005RelationTypeUnknown] = DiagnosticSeverity.Info,
         [L001IdentityConflict] = DiagnosticSeverity.Error,
+        [L002IssuedCopyDuplicate] = DiagnosticSeverity.Info,
         [F001ProfileUnrecognised] = DiagnosticSeverity.Info,
         [O001OntologyUnparseable] = DiagnosticSeverity.Warning,
         [O002ConceptUndeclared] = DiagnosticSeverity.Warning,
@@ -181,6 +233,9 @@ public static class DiagnosticCodes
         [S005SidecarFormatUnknown] = DiagnosticSeverity.Info,
         [S006ModelMismatch] = DiagnosticSeverity.Warning,
         [S007NoVectors] = DiagnosticSeverity.Warning,
+        [S008UpToUnresolved] = DiagnosticSeverity.Warning,
+        [S009SidecarItemsReplaced] = DiagnosticSeverity.Info,
+        [S010SearchTruncated] = DiagnosticSeverity.Warning,
     };
 
     /// <summary>Every code this Reader can report.</summary>
@@ -198,5 +253,5 @@ public static class DiagnosticCodes
     /// (Reader contract §11). Errors in other families only disable the feature concerned.
     /// </summary>
     public static bool IsInvalidating(string code) =>
-        (code.Length > 0 && code[0] is 'T' or 'P' or 'M' or 'C') || code == A009SignatureRequired; // A009 only when the host requires a signature.
+        (code.Length > 0 && code[0] is 'T' or 'P' or 'M' or 'C' or 'E') || code == A009SignatureRequired; // A009 only when the host requires a signature; E: contract §11.
 }

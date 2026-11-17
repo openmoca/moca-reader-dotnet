@@ -30,15 +30,42 @@ public sealed record ReaderLimits
     /// <summary>Largest source file checked for evidence; larger files are not checked.</summary>
     public int MaxSourceBytesChecked { get; init; } = 8 * 1024 * 1024;
 
-    /// <summary>Evidence entries checked across a whole package (contract §3).</summary>
+    /// <summary>Evidence entries checked in one read, by the package and all its members together (contract §3).</summary>
     public int MaxEvidenceChecksPerPackage { get; init; } = 10_000;
 
-    /// <summary>Source bytes scanned for evidence across a whole package, counted once per check (contract §3).</summary>
+    /// <summary>Source bytes scanned for evidence in one read, by the package and all its members together, counted once per check (contract §3).</summary>
     public long MaxEvidenceBytesPerPackage { get; init; } = 256L * 1024 * 1024;
 
     /// <summary>How deep members may nest; a member past it is not resolved (package spec §7.1, contract §3).</summary>
     public int MaxMemberDepth { get; init; } = 8;
 
     /// <summary>Members resolved in one read, at every depth; further members are not resolved (package spec §7.1, contract §3).</summary>
-    public int MaxMembers { get; init; } = 256;
+    public int MaxMembers { get; init; } = 4096;
+
+    /// <summary>
+    /// Bytes of all the members read in one read, each distinct member counted once; checked before each new member
+    /// is resolved, and R001 for each further member (contract §3).
+    /// </summary>
+    public long MaxMemberBytes { get; init; } = 1024L * 1024 * 1024;
+
+    /// <summary>
+    /// The largest scrypt work factor (log2 N) an envelope may ask for; E006 beyond it, without running scrypt
+    /// (encrypted packages §4). An integer from 1 to 22: anything else throws <see cref="ArgumentOutOfRangeException"/>
+    /// when the limits are made, before any read starts (Reader contract §3).
+    /// </summary>
+    public int MaxScryptWorkFactor
+    {
+        get => maxScryptWorkFactor;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1, nameof(MaxScryptWorkFactor));
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, 22, nameof(MaxScryptWorkFactor));
+            maxScryptWorkFactor = value;
+        }
+    }
+
+    private readonly int maxScryptWorkFactor = 20;
+
+    /// <summary>The bytes of one manifest image (M010), or of an envelope's cover copy (E005) (package spec §4.6, contract §3).</summary>
+    public int MaxImageBytes { get; init; } = 1024 * 1024;
 }

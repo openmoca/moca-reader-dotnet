@@ -17,6 +17,7 @@ public sealed class DenseBackend : ISearchBackend
     private readonly IEmbedder _embedder;
     private readonly DiagnosticBag _checks = new();
     private readonly Dictionary<string, bool> _checked = new(StringComparer.Ordinal);
+    private (string Text, float[] Vector)? _lastQuery;
 
     /// <summary>Creates the backend and checks every loaded sidecar's model against the embedder.</summary>
     public DenseBackend(Library library, IEmbedder embedder)
@@ -139,7 +140,13 @@ public sealed class DenseBackend : ISearchBackend
             return [];
         }
 
-        var q = (await _embedder.EmbedAsync([query], EmbeddingRole.Query, cancellationToken).ConfigureAwait(false))[0];
+        // One embedding per query string, however often a search asks again (contract §9.2).
+        if (_lastQuery is not { } last || last.Text != query)
+        {
+            _lastQuery = last = (query, (await _embedder.EmbedAsync([query], EmbeddingRole.Query, cancellationToken).ConfigureAwait(false))[0]);
+        }
+
+        var q = last.Vector;
         var excluded = filters.Exclude.Select(x => $"{x.Digest} {x.Node}").ToHashSet(StringComparer.Ordinal);
         var scored = new List<SearchHit>();
         foreach (var (result, chunks, index) in usable)
@@ -175,8 +182,14 @@ public sealed class DenseBackend : ISearchBackend
                     continue;
                 }
 
+                var hit = new SearchHit(result.Digest!, id, node.Path, rep.Locale, new CitationSpan(c.Start, c.End), 0);
+                if (filters.Accept is not null && !filters.Accept(hit))
+                {
+                    continue;
+                }
+
                 var score = Math.Round(Similarity(distance, q, c.Vector) * 1e4, MidpointRounding.AwayFromZero) / 1e4;
-                scored.Add(new SearchHit(result.Digest!, id, node.Path, rep.Locale, new CitationSpan(c.Start, c.End), score));
+                scored.Add(hit with { Score = score });
             }
         }
 

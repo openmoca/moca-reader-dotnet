@@ -117,6 +117,28 @@ public static partial class Dsse
     /// Attestations §7: DSSE payloads and signatures are base64 (RFC 4648 §4) or base64url (§5), with or without
     /// padding. Anything else is not base64, and null is returned.
     /// </summary>
+    /// <summary>
+    /// The 32 raw bytes of an Ed25519 public key in PEM, or null when it is not one. Package spec §4.11 compares keys
+    /// as bytes, not as PEM text.
+    /// </summary>
+    public static byte[]? Ed25519KeyBytes(string? publicKeyPem)
+    {
+        if (publicKeyPem is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var reader = new StringReader(publicKeyPem);
+            return new PemReader(reader).ReadObject() is Ed25519PublicKeyParameters key ? key.GetEncoded() : null;
+        }
+        catch (Exception e) when (e is IOException or InvalidCastException or ArgumentException or InvalidOperationException or Org.BouncyCastle.Security.SecurityUtilityException or PemException)
+        {
+            return null;
+        }
+    }
+
     internal static byte[]? DecodeBase64(string text)
     {
         if (!Base64Text().IsMatch(text))

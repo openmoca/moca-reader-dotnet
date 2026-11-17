@@ -67,7 +67,14 @@ public sealed record CitationPackage(
     [property: JsonPropertyName("version")] string Version,
     [property: JsonPropertyName("digest")] string Digest,
     [property: JsonPropertyName("signed")] bool Signed,
-    [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null);
+    [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null,
+    [property: JsonPropertyName("issuedCopy")] CitationIssuedCopy? IssuedCopy = null,
+    [property: JsonPropertyName("datePublished")] string? DatePublished = null);
+
+/// <summary>An issued copy in a citation record (attestations §7.1): the original digest and the issuers.</summary>
+public sealed record CitationIssuedCopy(
+    [property: JsonPropertyName("originalDigest")] string OriginalDigest,
+    [property: JsonPropertyName("issuers")] IReadOnlyList<string> Issuers);
 
 /// <summary>The node part of a citation record.</summary>
 public sealed record CitationNode
@@ -107,6 +114,40 @@ public sealed record CitationNode
     /// <summary><c>sha256:</c> digest of the node file.</summary>
     [JsonPropertyName("digest")]
     public string? Digest { get; init; }
+
+    /// <summary>True when the record comes from a file the issuer of an issued copy changed (attestations §7.1).</summary>
+    [JsonPropertyName("issuedChange")]
+    public bool? IssuedChange { get; init; }
+
+    /// <summary>The node's own <c>moca.date_published</c>, as written, when it parses (package spec §4.12). Never the package's.</summary>
+    [JsonPropertyName("datePublished")]
+    public string? DatePublished { get; init; }
+
+    /// <summary>The node's valid media descriptions, in order (package spec §5.7).</summary>
+    [JsonPropertyName("media")]
+    public IReadOnlyList<CitationMedia>? Media { get; init; }
+
+    /// <summary>The node's own <c>moca.contributors</c>, as written, when they match the node schema (package spec §4.13). Never the package's.</summary>
+    [JsonPropertyName("contributors")]
+    public IReadOnlyList<Contributor>? Contributors { get; init; }
+}
+
+/// <summary>A media description in a citation record (package spec §5.7): never fetched by the Reader.</summary>
+public sealed record CitationMedia(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("resource")] string Resource,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("duration")] double? Duration = null,
+    [property: JsonPropertyName("digest")] string? Digest = null,
+    [property: JsonPropertyName("transcript")] string? Transcript = null)
+{
+    /// <summary>The <c>source</c> of the reference, when this description is a valid alternate (package spec §5.7).</summary>
+    [JsonPropertyName("alternateOf")]
+    public string? AlternateOf { get; init; }
+
+    /// <summary>The alternate's stretches; present with <see cref="AlternateOf"/>.</summary>
+    [JsonPropertyName("sync")]
+    public IReadOnlyList<OpenMoca.Reader.Content.SyncEntry>? Sync { get; init; }
 }
 
 /// <summary>UTF-8 byte offsets into the node file.</summary>
@@ -187,10 +228,11 @@ public sealed record CitationReview(
     [property: JsonPropertyName("outcome")] string Outcome,
     [property: JsonPropertyName("signer")] string Signer,
     [property: JsonPropertyName("scope")] string? Scope = null,
-    [property: JsonPropertyName("packageVerified")] bool PackageVerified = false)
+    [property: JsonPropertyName("packageVerified")] bool PackageVerified = false,
+    [property: JsonPropertyName("fileChanged")] bool? FileChanged = null)
 {
     internal static CitationReview From(AttestedReview r, bool packageVerified) =>
-        new(r.Reviewer, r.ReviewedAt, r.Outcome, r.Signer, r.Scope, packageVerified);
+        new(r.Reviewer, r.ReviewedAt, r.Outcome, r.Signer, r.Scope, packageVerified, r.FileChanged);
 }
 
 /// <summary>One evidence entry: the source (as the node declares it), the selector, and whether it matched.</summary>
@@ -198,7 +240,18 @@ public sealed record CitationEvidence(
     [property: JsonPropertyName("source")] JsonObject Source,
     [property: JsonPropertyName("selector")] JsonObject? Selector = null,
     [property: JsonPropertyName("note")] string? Note = null,
-    [property: JsonPropertyName("matched")] bool? Matched = null);
+    [property: JsonPropertyName("matched")] bool? Matched = null)
+{
+    /// <summary>For a time range refined by a quote that matched: where the quote is spoken (Reader contract §7).</summary>
+    [JsonPropertyName("located")]
+    public EvidenceLocation? Located { get; init; }
+}
+
+/// <summary>Seconds on the cited source's timeline, from the start of the first cue a refined quote is in to the end
+/// of the last (Reader contract §7).</summary>
+public sealed record EvidenceLocation(
+    [property: JsonPropertyName("start")] double Start,
+    [property: JsonPropertyName("end")] double End);
 
 /// <summary>How a search found a record: <c>search</c>, or a structure relation followed by a hook.</summary>
 public sealed record CitationRetrieval(

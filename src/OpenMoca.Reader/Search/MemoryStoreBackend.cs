@@ -50,26 +50,30 @@ public sealed class MemoryStoreBackend(IEmbedder? embedder = null, bool filterPu
     /// <inheritdoc/>
     public async ValueTask<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit, SearchFilters filters, CancellationToken cancellationToken)
     {
+        // Contract §9.2: score over the loaded packages, then filter, so a pushed-down filter never changes a score.
         IEnumerable<(SearchHit Hit, string Text, CitationRecord Record, IReadOnlyList<string> Concepts, float[]? Vector)> candidates = _records;
+        var digests = filters.Digests.ToHashSet(StringComparer.Ordinal);
+        var excluded = filters.Exclude.Select(x => $"{x.Digest} {x.Node}").ToHashSet(StringComparer.Ordinal);
         if (filterPushdown)
         {
-            var digests = filters.Digests.ToHashSet(StringComparer.Ordinal);
-            var excluded = filters.Exclude.Select(x => $"{x.Digest} {x.Node}").ToHashSet(StringComparer.Ordinal);
-            candidates = candidates.Where(r => digests.Contains(r.Hit.Digest)
-                                               && !excluded.Contains($"{r.Hit.Digest} {r.Hit.Node}")
-                                               && Audience.Allowed(r.Record, filters.Audiences, filters.AllowUnlabelled)
-                                               && (filters.Concepts is null || r.Concepts.Any(filters.Concepts.Contains)));
+            candidates = candidates.Where(r => digests.Contains(r.Hit.Digest));
         }
+
+        bool Passes((SearchHit Hit, string Text, CitationRecord Record, IReadOnlyList<string> Concepts, float[]? Vector) r) =>
+            !filterPushdown || (!excluded.Contains($"{r.Hit.Digest} {r.Hit.Node}")
+                                && Audience.Allowed(r.Record, filters.Audiences, filters.AllowUnlabelled)
+                                && (filters.Concepts is null || r.Concepts.Any(filters.Concepts.Contains)));
 
         var list = candidates.ToList();
         if (embedder is null)
         {
-            var docs = list.Select(r => (r.Hit, r.Text, $"{r.Hit.Node}\u0000{r.Hit.Locale ?? ""}\u0000{r.Hit.Span?.Start ?? 0}")).ToList();
-            return Bm25.Rank(docs, query).Take(limit).Select(x => x.Item with { Score = x.Score }).ToList();
+            var docs = list.Select(r => (r, r.Text, $"{r.Hit.Node}\u0000{r.Hit.Locale ?? ""}\u0000{r.Hit.Span?.Start ?? 0}")).ToList();
+            return Bm25.Rank(docs, query).Where(x => Passes(x.Item)).Take(limit).Select(x => x.Item.Hit with { Score = x.Score }).ToList();
         }
 
         var q = (await embedder.EmbedAsync([query], EmbeddingRole.Query, cancellationToken).ConfigureAwait(false))[0];
         return list
+            .Where(Passes)
             .Select(r => r.Hit with { Score = Math.Round(DenseBackend.Similarity(distance, q, r.Vector ?? []) * 1e4, MidpointRounding.AwayFromZero) / 1e4 })
             .OrderByDescending(h => h.Score)
             .Take(limit)

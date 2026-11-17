@@ -235,29 +235,307 @@ public static partial class EvidenceText
 
     /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind)"/>, with the source's normalised text
     /// already computed (it is computed once per source and package).</summary>
-    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised)
+    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised) =>
+        CheckSelector(selector, raw, kind, normalised, null);
+
+    /// <summary>A FragmentSelector that conforms to Media Fragments: a time range in audio or video.</summary>
+    public static bool IsMediaTimeRange(JsonNode? selector) =>
+        selector is JsonObject o && JsonValues.StringOf(o["type"]) == "FragmentSelector"
+        && MediaFragments().IsMatch(JsonValues.StringOf(o["conformsTo"]) ?? "");
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?)"/>, with the declared duration of
+    /// the media, which bounds a time range with the latest cue end (Reader contract §7).</summary>
+    public static bool? CheckSelector(JsonObject selector, string raw, SourceKind kind, string? normalised, double? duration) =>
+        CheckSelector(selector, raw, kind, normalised, duration, null);
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?, double?)"/>, with a mapping from the
+    /// cited alternate's timeline to its reference's (package spec §5.7); a range that does not map does not match.</summary>
+    public static bool? CheckSelector(
+        JsonObject selector,
+        string raw,
+        SourceKind kind,
+        string? normalised,
+        double? duration,
+        Func<(double Start, double End), (double Start, double End)?>? toReference) =>
+        CheckSelectorLocated(selector, raw, kind, normalised, duration, toReference).Matched;
+
+    /// <summary>As <see cref="CheckSelector(JsonObject, string, SourceKind, string?, double?, Func{ValueTuple{double, double}, ValueTuple{double, double}?}?)"/>,
+    /// with, for a time range refined by a quote that matched, where the quote is spoken on the cited source's
+    /// timeline (Reader contract §7).</summary>
+    public static (bool? Matched, (double Start, double End)? Located) CheckSelectorLocated(
+        JsonObject selector,
+        string raw,
+        SourceKind kind,
+        string? normalised,
+        double? duration,
+        Func<(double Start, double End), (double Start, double End)?>? toReference,
+        IReadOnlyList<VttCue>? cues = null)
     {
+        ArgumentNullException.ThrowIfNull(selector);
         if (JsonValues.StringOf(selector["type"]) == "FragmentSelector")
         {
             // Contract §7: a media time range is checked only against WebVTT, by overlap with a cue.
             if (!MediaFragments().IsMatch(JsonValues.StringOf(selector["conformsTo"]) ?? "") || kind != SourceKind.WebVtt)
             {
-                return null;
+                return (null, null);
             }
 
-            var range = MediaTimeRange(JsonValues.StringOf(selector["value"]));
-            if (range is null)
+            var parsed = MediaTimeRange(JsonValues.StringOf(selector["value"]));
+            var range = parsed is { } p && toReference is not null ? toReference(p) : parsed;
+            if (range is null || parsed is null)
             {
-                return false;
+                return (false, null);
             }
 
             var (start, end) = range.Value;
-            return WebVtt(raw).Cues.Any(c => start < c.End && end > c.Start);
+            cues ??= WebVtt(raw).Cues;
+            if (!cues.Any(c => start < c.End && end > c.Start))
+            {
+                return (false, null);
+            }
+
+            // Contract §7: the range lies within the media, bounded by the latest cue end or the declared duration.
+            if (!double.IsPositiveInfinity(end))
+            {
+                var bound = cues.Max(c => c.End);
+                if (duration is { } d && d > bound)
+                {
+                    bound = d;
+                }
+
+                if (end > bound)
+                {
+                    return (false, null);
+                }
+            }
+
+            // Contract §7: a range refined by a quote matches only when the quote is in the cues it covers.
+            if (selector["refinedBy"] is not JsonObject refined || JsonValues.StringOf(refined["type"]) != "TextQuoteSelector")
+            {
+                return (true, null);
+            }
+
+            if (LocateQuote(cues, range.Value, refined) is not { } located)
+            {
+                return (false, null);
+            }
+
+            // On an alternate, back to the cited source's timeline by the stretch's offset.
+            var offset = parsed.Value.Start - start;
+            return (true, (located.Start + offset, located.End + offset));
         }
 
         // The quote is normalised as the source is, so markup in either never decides a match.
         var quote = JsonValues.StringOf(selector["type"]) == "TextQuoteSelector" ? NormaliseQuote(selector, kind) : selector;
-        return SelectorMatches(quote, normalised ?? NormalisedText(raw, kind));
+        return (SelectorMatches(quote, normalised ?? NormalisedText(raw, kind)), null);
+    }
+
+    private static bool IsQuoteSpace(char c) => c is '\t' or '\n' or '\f' or '\r' or ' ';
+
+    private static string CollapseSpaces(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        var inSpace = false;
+        foreach (var c in s)
+        {
+            if (IsQuoteSpace(c))
+            {
+                if (!inSpace)
+                {
+                    sb.Append(' ');
+                }
+
+                inSpace = true;
+            }
+            else
+            {
+                sb.Append(c);
+                inSpace = false;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Every start index of <paramref name="needle"/> in <paramref name="text"/>, overlapping ones included,
+    /// in one linear pass (Knuth-Morris-Pratt).</summary>
+    public static List<int> Occurrences(string text, string needle)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(needle);
+        var output = new List<int>();
+        var m = needle.Length;
+        if (m == 0)
+        {
+            return output;
+        }
+
+        var fail = new int[m];
+        for (int i = 1, k = 0; i < m; i++)
+        {
+            while (k > 0 && needle[i] != needle[k])
+            {
+                k = fail[k - 1];
+            }
+
+            if (needle[i] == needle[k])
+            {
+                k++;
+            }
+
+            fail[i] = k;
+        }
+
+        for (int i = 0, k = 0; i < text.Length; i++)
+        {
+            while (k > 0 && text[i] != needle[k])
+            {
+                k = fail[k - 1];
+            }
+
+            if (text[i] == needle[k])
+            {
+                k++;
+            }
+
+            if (k == m)
+            {
+                output.Add(i - m + 1);
+                k = fail[k - 1];
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>A range-minimum (or maximum) table: a query over values[lo..hi] in O(1).</summary>
+    private static Func<int, int, double> SparseTable(double[] values, Func<double, double, double> pick)
+    {
+        var levels = new List<double[]> { values };
+        for (var w = 1; 2 * w <= values.Length; w *= 2)
+        {
+            var prev = levels[^1];
+            var next = new double[prev.Length - w];
+            for (var i = 0; i < next.Length; i++)
+            {
+                next[i] = pick(prev[i], prev[i + w]);
+            }
+
+            levels.Add(next);
+        }
+
+        return (lo, hi) =>
+        {
+            var k = System.Numerics.BitOperations.Log2((uint)(hi - lo + 1));
+            return pick(levels[k][lo], levels[k][hi - (1 << k) + 1]);
+        };
+    }
+
+    /// <summary>
+    /// Contract §7: where a refining quote is spoken in a time range. The covered text is the payloads of the cues the
+    /// range overlaps, in file order, joined with LF, with each run of white space (the five ASCII characters) as one
+    /// space, the quote's parts too. A cue is touched when a non-space character of <c>exact</c> comes from it. Of
+    /// every occurrence, the one whose touched cues span the shortest time wins, the earliest on a tie. Contract §3:
+    /// linear in the covered text and the quote.
+    /// </summary>
+    /// <returns>The earliest start and the latest end of the touched cues; null when the quote is not in the covered
+    /// text.</returns>
+    public static (double Start, double End)? LocateQuote(IReadOnlyList<VttCue> cues, (double Start, double End) range, JsonObject quote)
+    {
+        ArgumentNullException.ThrowIfNull(cues);
+        ArgumentNullException.ThrowIfNull(quote);
+        if (JsonValues.StringOf(quote["exact"]) is not { } rawExact)
+        {
+            return null;
+        }
+
+        var exact = CollapseSpaces(rawExact);
+        if (exact.All(IsQuoteSpace))
+        {
+            return null;
+        }
+
+        var prefix = CollapseSpaces(JsonValues.StringOf(quote["prefix"]) ?? "");
+        var needle = prefix + exact + CollapseSpaces(JsonValues.StringOf(quote["suffix"]) ?? "");
+        var covered = cues.Where(c => range.Start < c.End && range.End > c.Start).ToList();
+        var text = new StringBuilder();
+        var owner = new List<int>();
+        for (var i = 0; i < covered.Count; i++)
+        {
+            foreach (var c in (i > 0 ? "\n" : "") + covered[i].Text)
+            {
+                if (IsQuoteSpace(c))
+                {
+                    if (owner.Count > 0 && owner[^1] == -1)
+                    {
+                        continue;
+                    }
+
+                    text.Append(' ');
+                    owner.Add(-1);
+                }
+                else
+                {
+                    text.Append(c);
+                    owner.Add(i);
+                }
+            }
+        }
+
+        var n = owner.Count;
+        // The owner of the first non-space character at or after each position, and of the last at or before it.
+        var next = new int[n + 1];
+        next[n] = -1;
+        for (var i = n - 1; i >= 0; i--)
+        {
+            next[i] = owner[i] >= 0 ? owner[i] : next[i + 1];
+        }
+
+        var prev = new int[n];
+        for (var i = 0; i < n; i++)
+        {
+            prev[i] = owner[i] >= 0 ? owner[i] : i > 0 ? prev[i - 1] : -1;
+        }
+
+        // Cues with text, in order: the touched cues of a span are those between its first and last owner.
+        var rank = Enumerable.Repeat(-1, covered.Count).ToArray();
+        var filled = new List<int>();
+        foreach (var o in owner)
+        {
+            if (o >= 0 && rank[o] < 0)
+            {
+                rank[o] = filled.Count;
+                filled.Add(o);
+            }
+        }
+
+        if (filled.Count == 0)
+        {
+            return null;
+        }
+
+        var earliest = SparseTable([.. filled.Select(c => covered[c].Start)], Math.Min);
+        var latest = SparseTable([.. filled.Select(c => covered[c].End)], Math.Max);
+        (double Start, double End)? best = null;
+        foreach (var at in Occurrences(text.ToString(), needle))
+        {
+            var a = at + prefix.Length;
+            var b = a + exact.Length;
+            var (first, last) = (next[a], prev[b - 1]);
+            if (first < 0 || last < 0 || rank[first] > rank[last])
+            {
+                continue;
+            }
+
+            (double Start, double End) span = (earliest(rank[first], rank[last]), latest(rank[first], rank[last]));
+            if (best is not { } bs || span.End - span.Start < bs.End - bs.Start
+                || (span.End - span.Start == bs.End - bs.Start && span.Start < bs.Start))
+            {
+                best = span;
+            }
+        }
+
+        return best;
     }
 
     // A quote from captions is cue text already; Markdown and HTML quotes lose markup as their sources do.

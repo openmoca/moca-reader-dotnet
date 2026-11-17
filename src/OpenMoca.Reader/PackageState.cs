@@ -41,6 +41,21 @@ public sealed partial record PackageState
     /// <summary>Each node file's <c>moca.contested_by</c>.</summary>
     [JsonPropertyName("contests")] public IReadOnlyDictionary<string, IReadOnlyList<string>> Contests { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
 
+    /// <summary>The package's issued copy, when it has one (attestations §7.1), so a store search recomputes it.</summary>
+    [JsonPropertyName("issuedCopy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IssuedCopy? IssuedCopy { get; init; }
+
+    /// <summary>The package's reading order, when it resolves (package spec §4.10), so a store search applies upTo.</summary>
+    [JsonPropertyName("readingOrder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OpenMoca.Reader.Structure.ReadingOrder? ReadingOrder { get; init; }
+
+    /// <summary>The bindings by composition (package spec §5.6), when the package has valid members, so a store search filters and limits members as a library does.</summary>
+    [JsonPropertyName("composition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OpenMoca.Reader.Structure.CompositionState? Composition { get; init; }
+
     /// <summary>The state of a valid package result.</summary>
     public static PackageState From(PackageResult result)
     {
@@ -65,6 +80,9 @@ public sealed partial record PackageState
             Signers = [.. result.Signers],
             Reviews = result.ReviewsByFile.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<AttestedReview>)[.. kv.Value], StringComparer.Ordinal),
             Contests = contests,
+            ReadingOrder = result.ResolvedReadingOrder,
+            IssuedCopy = result.IssuedCopy,
+            Composition = OpenMoca.Reader.Structure.Composition.Of(result),
         };
     }
 
@@ -153,7 +171,14 @@ public sealed partial record PackageState
         var reviews = state.Reviews.GetValueOrDefault(file) ?? [];
         return record with
         {
-            Package = record.Package with { Signed = signed, Signers = signed ? [.. state.Signers] : null },
+            // Attestations §7.1: whether the copy is bound to its publisher depends on the trust root, so it comes from the state.
+            Package = record.Package with
+            {
+                Signed = signed,
+                Signers = signed ? [.. state.Signers] : null,
+                IssuedCopy = state.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null,
+            },
+            Node = record.Node with { IssuedChange = state.IssuedCopy?.ChangedFiles.Contains(file) == true ? true : null },
             Trust = trust with
             {
                 Stale = trust.StaleAfter is not null && staleAt is not null && now >= staleAt,

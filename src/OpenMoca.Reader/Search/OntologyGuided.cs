@@ -37,9 +37,11 @@ public static class OntologyGuided
                 continue;
             }
 
+            // Reader interface §5.4: the preferred label or any alternative label, as written (no forms made here).
             var label = StructureGraph.Preferred(c.Labels);
-            var labelWords = label is null ? [] : Bm25.Tokens(label);
-            if (labelWords.Count > 0 && labelWords.All(words.Contains))
+            IEnumerable<string> labels = label is null ? [] : [label];
+            labels = labels.Concat(c.AltLabels.Values.SelectMany(v => v));
+            if (labels.Any(l => Bm25.Tokens(l) is { Count: > 0 } lw && lw.All(words.Contains)))
             {
                 matched.Add(c.Iri);
             }

@@ -23,6 +23,7 @@ public static partial class StructureParser
     private static readonly Dictionary<string, (string Kind, bool Flip)> Predicates = new(StringComparer.Ordinal)
     {
         [$"{Skos}prefLabel"] = ("label", false),
+        [$"{Skos}altLabel"] = ("altLabel", false),
         [$"{Skos}definition"] = ("definition", false),
         [$"{Skos}broader"] = ("broader", false),
         [$"{Skos}narrower"] = ("broader", true),
@@ -165,7 +166,7 @@ public static partial class StructureParser
             }
 
             var (kind, flip) = known;
-            if (kind is "label" or "definition")
+            if (kind is "label" or "altLabel" or "definition")
             {
                 if (t.Object is ILiteralNode literal)
                 {

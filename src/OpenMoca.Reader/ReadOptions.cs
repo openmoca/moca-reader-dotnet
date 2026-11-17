@@ -38,6 +38,18 @@ public sealed record ReadOptions
     /// </summary>
     public ISigstoreVerifier? SigstoreVerifier { get; init; }
 
+    /// <summary>
+    /// Supplies keys to open an envelope (encrypted packages §5.1). It is given the stanzas, the unverified outline and
+    /// which file is being opened; keys come from host configuration only. Null: envelopes are not opened (E001).
+    /// </summary>
+    public Func<Encryption.EnvelopeKeyRequest, CancellationToken, ValueTask<Encryption.EnvelopeKey?>>? KeyProvider { get; init; }
+
+    /// <summary>
+    /// Decrypts envelopes, enabling the optional feature <c>encryption</c>. Null: envelopes are recognised and reported
+    /// with E001. The <c>OpenMoca.Reader.Age</c> package provides one (<c>AgeEnvelopeDecryptor</c>).
+    /// </summary>
+    public Encryption.IEnvelopeDecryptor? EnvelopeDecryptor { get; init; }
+
     /// <summary>The clock for trust-root key expiry.</summary>
     public Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 }

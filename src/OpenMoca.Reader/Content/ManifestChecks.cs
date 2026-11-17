@@ -11,7 +11,7 @@ internal static partial class ManifestChecks
     public static readonly HashSet<string> ManifestKeys =
     [
         "$schema", "mocaVersion", "id", "version", "title", "description", "language", "locales", "license",
-        "publisher", "validFrom", "validUntil", "members", "relations", "profiles",
+        "publisher", "url", "contributors", "datePublished", "distribution", "images", "translations", "tags", "apps", "readingOrder", "issuedCopies", "validFrom", "validUntil", "members", "relations", "profiles",
     ];
 
     // URN namespaces registered with IANA that are commonly used as package ids. Not exhaustive: M007 is informational.
@@ -91,16 +91,47 @@ internal static partial class ManifestChecks
                 $"\"urn:{urn.Groups[1].Value}:\" is not a registered URN namespace (RFC 8141); prefer an https: or tag: URI", file);
         }
 
+        var unrecognised = false;
         if (m["profiles"] is JsonObject profiles)
         {
             foreach (var (uri, _) in profiles)
             {
                 if (!knownProfiles.Contains(uri))
                 {
+                    unrecognised = true;
                     diagnostics.Add(DiagnosticCodes.F001ProfileUnrecognised,
                         $"profile {uri} is not recognised; its data is preserved but not interpreted", file);
                 }
             }
         }
+
+        // Package spec §7.2: a type that is neither core nor defined by a declared profile is reported, unless the
+        // package declares a profile this Reader does not recognise, which might define it.
+        if (!unrecognised && m["relations"] is JsonArray relations)
+        {
+            var defined = new HashSet<string>(StringComparer.Ordinal);
+            if (m["profiles"] is JsonObject declared)
+            {
+                foreach (var (uri, _) in declared)
+                {
+                    if (ProfileRelationTypes.TryGetValue(uri, out var types)) defined.UnionWith(types);
+                }
+            }
+            foreach (var r in relations)
+            {
+                if (r is JsonObject o && JsonValues.StringOf(o["type"]) is { } type && !CoreRelationTypes.Contains(type) && !defined.Contains(type))
+                {
+                    diagnostics.Add(DiagnosticCodes.R005RelationTypeUnknown,
+                        $"relation type \"{type}\" is not a core type and no declared profile defines it; it is preserved and has no effect", file);
+                }
+            }
+        }
     }
+
+    /// <summary>Package spec §7.2: the core relation types.</summary>
+    public static readonly IReadOnlySet<string> CoreRelationTypes =
+        new HashSet<string>(["supersedes", "amends", "conflictsWith", "crossReferences", "isPartOf"], StringComparer.Ordinal);
+
+    /// <summary>Relation types each recognised profile defines. None does yet.</summary>
+    private static readonly Dictionary<string, string[]> ProfileRelationTypes = new(StringComparer.Ordinal);
 }

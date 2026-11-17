@@ -1,3 +1,4 @@
+using OpenMoca.Reader.Encryption;
 using OpenMoca.Reader.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -33,6 +34,9 @@ public static class ConformanceCases
             RequireSignature = o["requireSignature"]?.GetValue<bool>() == true,
             Strict = o["strict"]?.GetValue<bool>() == true,
             SigstoreVerifier = new OpenMoca.Reader.Sigstore.SigstoreVerifier(),
+            // This Reader implements the optional feature `encryption` through OpenMoca.Reader.Age.
+            EnvelopeDecryptor = OpenMoca.Reader.Age.AgeEnvelopeDecryptor.Instance,
+            KeyProvider = KeyProvider(root, o),
         };
 
         // The host clock applies to reading too: keys expire (attestations §6).
@@ -47,9 +51,26 @@ public static class ConformanceCases
         return Str(c["kind"]) switch
         {
             "structure" => await StructureCaseAsync(root, c, readOptions, overlays, cancellationToken),
+            "map-time" => await MapTimeCaseAsync(root, c, readOptions, cancellationToken),
             "search" => await SearchCaseAsync(root, c, o, readOptions, overlays, cancellationToken),
             _ => await PackageCaseAsync(root, c, o, readOptions, cancellationToken),
         };
+    }
+
+    // Reader interface §4: MapTime on the node's default-language citation record, once per call.
+    private static async Task<JsonObject> MapTimeCaseAsync(string root, JsonObject c, ReadOptions readOptions, CancellationToken cancellationToken)
+    {
+        var result = await MocaReader.ReadPackageAsync(Path.Combine(root, Str(c["target"])!), readOptions, cancellationToken);
+        var record = result.Valid ? new Library().Add(result).Citations().FirstOrDefault(r => r.Node.Path == Str(c["node"])) : null;
+        var answers = new JsonArray();
+        foreach (var call in (c["calls"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            var t = call["t"]!.GetValue<double>();
+            var mapped = record is null ? null : Alternates.MapTime(record, Str(call["from"])!, Str(call["to"])!, t);
+            answers.Add(mapped is { } v ? JsonValue.Create(v) : null);
+        }
+
+        return new JsonObject { ["codes"] = StructureJson.Strings(result.Diagnostics.Select(d => d.Code)), ["result"] = answers };
     }
 
     private static async Task<JsonObject> PackageCaseAsync(string root, JsonObject c, JsonObject o, ReadOptions readOptions, CancellationToken cancellationToken)
@@ -57,6 +78,14 @@ public static class ConformanceCases
         var result = await MocaReader.ReadPackageAsync(Path.Combine(root, Str(c["target"])!), readOptions, cancellationToken);
         var codes = result.Diagnostics.Select(d => d.Code).ToList();
         bool? sidecarUsable = null;
+        // Encrypted packages §6: the envelope's own index.age, through the same key provider.
+        if (o["envelopeSidecar"]?.GetValue<bool>() == true)
+        {
+            var bound = await SidecarBinder.BindEnvelopeAsync(Path.Combine(root, Str(c["target"])!), result, readOptions, cancellationToken);
+            codes.AddRange(bound.Diagnostics.Select(d => d.Code));
+            sidecarUsable = bound.Usable;
+        }
+
         if (Str(o["sidecar"]) is { } sidecar)
         {
             var bound = SidecarBinder.Bind(Path.Combine(root, sidecar), result);
@@ -65,6 +94,7 @@ public static class ConformanceCases
         }
 
         var evidenceMatched = new JsonObject();
+        var evidenceLocated = new JsonObject();
         if (result.Valid)
         {
             foreach (var r in new Library().Add(result).Citations())
@@ -72,6 +102,7 @@ public static class ConformanceCases
                 if (r.Evidence.Count > 0)
                 {
                     evidenceMatched[r.Node.Path] = new JsonArray([.. r.Evidence.Select(e => e.Matched is { } m ? (JsonNode)JsonValue.Create(m) : null)]);
+                    evidenceLocated[r.Node.Path] = new JsonArray([.. r.Evidence.Select(e => e.Located is { } at ? (JsonNode)new JsonObject { ["start"] = at.Start, ["end"] = at.End } : null)]);
                 }
             }
         }
@@ -82,7 +113,20 @@ public static class ConformanceCases
             ["codes"] = StructureJson.Strings(codes),
             ["capabilities"] = StructureJson.Strings(result.Capabilities),
             ["digest"] = result.Digest,
+            ["distribution"] = result.Distribution,
+            ["images"] = result.Images is { } images ? new JsonArray([.. images.Select(ImageJson)]) : null,
+            ["translations"] = result.Translations is { } translations ? TranslationsJson(translations) : null,
+            ["tags"] = result.Tags is { } tags ? StructureJson.Strings(tags) : null,
+            ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
+            ["readingOrder"] = result.ReadingOrder,
+            ["datePublished"] = result.DatePublished,
+            ["publisher"] = result.Publisher is { } publisher ? JsonSerializer.SerializeToNode(publisher, CitationJson.Options) : null,
+            ["url"] = result.Url,
+            ["contributors"] = result.Contributors is { } contributors ? JsonSerializer.SerializeToNode(contributors, CitationJson.Options) : null,
+            ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
+            ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
+            ["evidenceLocated"] = evidenceLocated,
         };
         if (sidecarUsable is not null)
         {
@@ -160,6 +204,7 @@ public static class ConformanceCases
             Locale = Str(search["locale"]),
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
+            UpTo = Str(search["upTo"]),
         };
         var audiences = o["audiences"] is JsonArray aud ? aud.Select(Str).OfType<string>().ToList() : null;
         var query = Str(search["query"]) ?? "";
@@ -185,10 +230,47 @@ public static class ConformanceCases
                 await store.IngestAsync(library, cancellationToken);
             }
 
+            // Members a composed package brought into the library are matched by where their resolver found them.
+            foreach (var p in library.Packages)
+            {
+                if (p.Result.Source?.Location is { } location && !sources.ContainsKey(p.Result.Digest!))
+                {
+                    sources[p.Result.Digest!] = Path.GetFullPath(location);
+                }
+            }
+
             var allowPaths = (o["allow"] as JsonArray ?? []).Select(Str).OfType<string>().Select(t => Path.GetFullPath(Path.Combine(root, t))).ToHashSet();
             var allowedDigests = sources.Where(kv => allowPaths.Contains(kv.Value)).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
             var allowed = library.Packages.Where(p => allowedDigests.Contains(p.Result.Digest!)).Select(p => PackageState.From(p.Result));
-            records = await new MocaSearch(allowed, () => now, store, audiences, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true) { AllowUnlabelled = allowUnlabelled }.SearchAsync(query, options, cancellationToken);
+            // Contract §9.4: the structure source, packages read into a small library whose structure the hooks see.
+            Library? structure = null;
+            if (o["structure"] is JsonArray structureTargets)
+            {
+                structure = new Library(new LibraryOptions { Clock = () => now, Overlays = overlays });
+                foreach (var t in structureTargets.Select(Str).OfType<string>())
+                {
+                    var r = await MocaReader.ReadPackageAsync(Path.Combine(root, t), readOptions, cancellationToken);
+                    if (r.Valid)
+                    {
+                        structure.Add(r);
+                    }
+                }
+            }
+
+            var storeHooks = Str(o["hooks"]) switch
+            {
+                "hostile" => HostileHooks(),
+                "hostile-ingress" => HostileIngressHooks(),
+                "ontology-guided" => OntologyGuided.Hooks(),
+                _ => null,
+            };
+            var mocaSearch = new MocaSearch(allowed, () => now, store, audiences, storeHooks, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true)
+            {
+                AllowUnlabelled = allowUnlabelled,
+                StructureSource = structure,
+            };
+            records = await mocaSearch.SearchAsync(query, options, cancellationToken);
+            codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
         }
         else
         {
@@ -210,7 +292,10 @@ public static class ConformanceCases
                 "ontology-guided" => OntologyGuided.Hooks(),
                 _ => null,
             };
-            records = await new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled }.SearchAsync(query, options, cancellationToken);
+            var mocaSearch = new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled };
+            records = await mocaSearch.SearchAsync(query, options, cancellationToken);
+            // Contract §9: the search's own findings, such as S008.
+            codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
         }
 
         return new JsonObject
@@ -306,6 +391,99 @@ public static class ConformanceCases
         }
     }
 
+/// <summary>
+    /// The conformance key provider (encrypted packages §5.1): the identities in the case's identity files, its
+    /// passphrase, or its file key (hex). No key options means no key provider.
+    /// </summary>
+    private static Func<EnvelopeKeyRequest, CancellationToken, ValueTask<EnvelopeKey?>>? KeyProvider(string root, JsonObject o)
+    {
+        if (o["identities"] is JsonArray files)
+        {
+            var identities = files.SelectMany(f => File.ReadAllLines(Path.Combine(root, Str(f)!)))
+                .Select(l => l.Trim()).Where(l => l.StartsWith("AGE-SECRET-KEY-1", StringComparison.Ordinal)).ToList();
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(Identities: identities));
+        }
+
+        if (Str(o["passphrase"]) is { } passphrase)
+        {
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(Passphrase: passphrase));
+        }
+
+        if (Str(o["fileKey"]) is { } fileKey)
+        {
+            var bytes = Convert.FromHexString(fileKey);
+            return (_, _) => ValueTask.FromResult<EnvelopeKey?>(new EnvelopeKey(FileKey: bytes));
+        }
+
+        return null;
+    }
+
+    /// <summary>Package spec §4.6: an image as declared; absent members are left out.</summary>
+    private static JsonNode ImageJson(ManifestImage image)
+    {
+        var json = new JsonObject { ["src"] = image.Src, ["role"] = image.Role, ["type"] = image.Type };
+        if (image.Sizes is not null)
+        {
+            json["sizes"] = image.Sizes;
+        }
+
+        if (image.Alt is not null)
+        {
+            json["alt"] = image.Alt;
+        }
+
+        return json;
+    }
+
+    /// <summary>Package spec §4.7: translations as declared; absent members are left out.</summary>
+    private static JsonObject TranslationsJson(IReadOnlyDictionary<string, ManifestTranslation> translations)
+    {
+        var json = new JsonObject();
+        foreach (var (tag, t) in translations)
+        {
+            var one = new JsonObject();
+            if (t.Title is not null)
+            {
+                one["title"] = t.Title;
+            }
+
+            if (t.Description is not null)
+            {
+                one["description"] = t.Description;
+            }
+
+            if (t.Tags is not null)
+            {
+                one["tags"] = StructureJson.Strings(t.Tags);
+            }
+
+            if (t.Alt is not null)
+            {
+                one["alt"] = new JsonObject(t.Alt.Select(kv => KeyValuePair.Create<string, JsonNode?>(kv.Key, kv.Value)));
+            }
+
+            json[tag] = one;
+        }
+
+        return json;
+    }
+
+    private static JsonObject EnvelopeJson(EnvelopeInfo envelope)
+    {
+        var json = new JsonObject { ["opened"] = envelope.Opened };
+        if (envelope.Format is not null)
+        {
+            json["format"] = envelope.Format;
+        }
+
+        if (envelope.Outline is not null)
+        {
+            json["outline"] = envelope.Outline.DeepClone();
+        }
+
+        return json;
+    }
+
     private static ReaderLimits Limits(JsonObject? limits)
     {
         if (limits is null)
@@ -326,6 +504,11 @@ public static class ConformanceCases
             MaxEvidenceChecksPerPackage = Int("maxEvidenceChecksPerPackage") ?? d.MaxEvidenceChecksPerPackage,
             MaxEvidenceBytesPerPackage = JsonValues.IntegerOf(limits["maxEvidenceBytesPerPackage"]) ?? d.MaxEvidenceBytesPerPackage,
             MaxSourceBytesChecked = Int("maxSourceBytesChecked") ?? d.MaxSourceBytesChecked,
+            MaxScryptWorkFactor = Int("maxScryptWorkFactor") ?? d.MaxScryptWorkFactor,
+            MaxImageBytes = Int("maxImageBytes") ?? d.MaxImageBytes,
+            MaxMembers = Int("maxMembers") ?? d.MaxMembers,
+            MaxMemberBytes = JsonValues.IntegerOf(limits["maxMemberBytes"]) ?? d.MaxMemberBytes,
+            MaxMemberDepth = Int("maxMemberDepth") ?? d.MaxMemberDepth,
         };
     }
 

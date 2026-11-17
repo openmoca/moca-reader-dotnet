@@ -30,6 +30,13 @@ public static class StructureJson
         }
 
         obj["labels"] = labels;
+        var alts = new JsonObject();
+        foreach (var (lang, values) in c.AltLabels)
+        {
+            alts[lang] = new JsonArray([.. values.Select(v => (JsonNode?)v)]);
+        }
+
+        obj["altLabels"] = alts;
         if (c.Definition is not null)
         {
             obj["definition"] = c.Definition;

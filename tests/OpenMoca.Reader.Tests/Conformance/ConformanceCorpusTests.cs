@@ -33,9 +33,9 @@ public sealed class ConformanceCorpusTests
     }
 
     [Fact]
-    public void Corpus_WhenLoaded_IsVersion06()
+    public void Corpus_WhenLoaded_IsVersion07()
     {
-        Assert.Matches(@"^0\.6\.", Corpus.Value["corpusVersion"]!.GetValue<string>());
+        Assert.Matches(@"^0\.7\.", Corpus.Value["corpusVersion"]!.GetValue<string>());
     }
 
     [Theory]
@@ -48,7 +48,7 @@ public sealed class ConformanceCorpusTests
         var problems = JsonValues.StringOf(c["kind"]) switch
         {
             "search" => CheckSearch(expect, actual),
-            "structure" => CheckStructure(expect, actual),
+            "structure" or "map-time" => CheckStructure(expect, actual),
             _ => CheckPackage(expect, actual),
         };
 
@@ -96,6 +96,17 @@ public sealed class ConformanceCorpusTests
             if (!JsonNode.DeepEquals(want, got))
             {
                 problems.Add($"evidenceMatched {path}: expected {want?.ToJsonString()}, got {got?.ToJsonString()}");
+            }
+        }
+
+        // Contract §7: where a refined quote is spoken; numbers compared as JSON text, so 10 and 10.0 agree.
+        foreach (var (path, want) in e["evidenceLocated"] as JsonObject ?? [])
+        {
+            var got = actual["evidenceLocated"]?[path];
+            var gotText = got is null ? "null" : JsonNode.Parse(got.ToJsonString())!.ToJsonString();
+            if ((want?.ToJsonString() ?? "null") != gotText)
+            {
+                problems.Add($"evidenceLocated {path}: expected {want?.ToJsonString()}, got {gotText}");
             }
         }
 

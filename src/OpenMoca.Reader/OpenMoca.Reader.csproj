@@ -7,7 +7,7 @@
   <PropertyGroup>
     <RootNamespace>OpenMoca.Reader</RootNamespace>
     <PackageId>OpenMoca.Reader</PackageId>
-    <Description>Reads, verifies and searches MOCA packages (moca-spec 0.4).</Description>
+    <Description>Reads, verifies and searches MOCA packages (moca-spec 0.7).</Description>
   </PropertyGroup>
 
   <ItemGroup>

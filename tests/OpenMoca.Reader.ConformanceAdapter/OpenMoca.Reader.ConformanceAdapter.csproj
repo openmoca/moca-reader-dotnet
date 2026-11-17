@@ -12,5 +12,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenMoca.Reader\OpenMoca.Reader.csproj" />
     <ProjectReference Include="..\..\src\OpenMoca.Reader.Sigstore\OpenMoca.Reader.Sigstore.csproj" />
+    <ProjectReference Include="..\..\src\OpenMoca.Reader.Age\OpenMoca.Reader.Age.csproj" />
   </ItemGroup>
 </Project>

@@ -20,7 +20,7 @@ namespace OpenMoca.Reader;
 public static partial class MocaReader
 {
     /// <summary>The specification version this Reader implements, <c>major.minor</c> (package spec §14).</summary>
-    public const string MocaVersion = "0.6";
+    public const string MocaVersion = "0.7";
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
@@ -43,7 +43,9 @@ public static partial class MocaReader
         return ReadInternalAsync(target, options ?? new ReadOptions(), [], new MemberBudget(), cancellationToken);
     }
 
-    private static async Task<PackageResult> ReadInternalAsync(PackageTarget target, ReadOptions options, IReadOnlyList<string> stack, MemberBudget budget, CancellationToken cancellationToken)
+    private static async Task<PackageResult> ReadInternalAsync(
+        PackageTarget target, ReadOptions options, IReadOnlyList<string> stack, MemberBudget budget, CancellationToken cancellationToken,
+        EnvelopeCheck? envelopeCheck = null)
     {
         var diagnostics = new DiagnosticBag(options.Strict);
         var result = new PackageResult();
@@ -62,6 +64,14 @@ public static partial class MocaReader
 
         result.Source = source;
         var (entriesOk, files) = PackageDigest.PackageFiles(source, diagnostics);
+        // Encrypted packages §2: an archive with moca-enc.json at its root is an envelope (never the inner archive).
+        if (envelopeCheck is null && IsEnvelope(source, files))
+        {
+            return await ReadEnvelopeAsync((ArchiveSource)source, files, entriesOk, diagnostics, result, options,
+                (plain, check) => ReadInternalAsync(PackageTarget.FromArchive(plain), options, stack, budget, cancellationToken, check),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         if (!files.ContainsKey(PackageDigest.ManifestFile))
         {
             diagnostics.Add(DiagnosticCodes.T002ManifestNotFound, "the target has no moca.json at its root");
@@ -95,6 +105,12 @@ public static partial class MocaReader
             return Finish(result, diagnostics);
         }
 
+        // Contract §3: the bytes of every member read count toward one budget for the whole read.
+        if (stack.Count > 0)
+        {
+            budget.Bytes += bytes.Values.Sum(b => (long)b.Length);
+        }
+
         result.FileBytes = bytes;
         JsonObject? manifest;
         try
@@ -118,7 +134,32 @@ public static partial class MocaReader
         }
 
         result.Manifest = manifest;
+        if (envelopeCheck is not null && OutlineMismatch(envelopeCheck, manifest, bytes, options.Limits) is { } why)
+        {
+            diagnostics.Add(DiagnosticCodes.E004OutlineMismatch, why, PackageDigest.ManifestFile);
+            return Finish(result, diagnostics);
+        }
+
         ManifestChecks.Check(manifest, diagnostics, options.KnownProfiles);
+        // Package spec §4.1: the publisher's intent, exposed and never acted on. Null when the manifest fails its schema.
+        if (!diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
+        {
+            result.Distribution = JsonValues.StringOf(manifest["distribution"]) ?? "open";
+            // Package spec §4.9: advice, exposed as declared and never fetched, resolved or opened.
+            if (manifest["apps"] is JsonArray apps)
+            {
+                result.Apps = [.. apps.Select(JsonValues.StringOf).OfType<string>()];
+            }
+
+            // Package spec §4.12: informative, as written.
+            if (manifest["datePublished"] is JsonValue published && published.TryGetValue<string>(out var datePublished))
+            {
+                result.DatePublished = datePublished;
+            }
+
+            // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
+            result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
+        }
         result.Profiles = (manifest["profiles"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? [];
         // Package spec §14: M008 only for a declared mocaVersion below 0.4; M009 for one newer than this Reader's.
         var declared = MajorMinor().Match(JsonValues.StringOf(manifest["mocaVersion"]) ?? "");
@@ -145,8 +186,23 @@ public static partial class MocaReader
             result.PayloadManifest = payloadManifest;
         }
 
-        result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits);
+        result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits, budget.Evidence);
         result.Structure = PackageStructure.Read(bytes, result.Nodes, diagnostics, options.Limits, result.Digest);
+        // Package spec §4.10: readingOrder resolves against the package's own structure.ttl only.
+        if (JsonValues.StringOf(manifest["readingOrder"]) is { } readingOrder && !diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
+        {
+            if (ReadingOrder.Resolve(result.Structure?.Graph, readingOrder) is { } order)
+            {
+                result.ReadingOrder = order.Iri;
+                result.ResolvedReadingOrder = order;
+            }
+            else
+            {
+                diagnostics.Add(DiagnosticCodes.M014ReadingOrderUnresolved,
+                    $"readingOrder {readingOrder} is not an ordered collection with a member list in structure.ttl; it is ignored",
+                    PackageDigest.ManifestFile);
+            }
+        }
         var members = (manifest["members"] as JsonArray ?? []).OfType<JsonObject>().ToList();
         if (result.Nodes.Count == 0 && members.Count == 0)
         {
@@ -175,6 +231,7 @@ public static partial class MocaReader
         var attestationFiles = bytes.Keys
             .Where(p => p.StartsWith(PackageDigest.AttestationsDirectory + "/", StringComparison.Ordinal) && AttestationFile().IsMatch(p))
             .Order(StringComparer.Ordinal);
+        var pending = new List<(string File, AttestationFormats.Parsed Parsed, string Role, AttestationRecord Record)>();
         foreach (var file in attestationFiles)
         {
             var (parsed, malformed) = AttestationFormats.Parse(file, bytes[file]);
@@ -186,41 +243,72 @@ public static partial class MocaReader
             }
 
             var type = JsonValues.StringOf(parsed.Statement["predicateType"]);
-            if (type is not (AttestationFormats.PredicatePackage or AttestationFormats.PredicateReview))
+            var role = type switch
+            {
+                AttestationFormats.PredicatePackage => "package",
+                AttestationFormats.PredicateReview => "review",
+                AttestationFormats.PredicateIssuedCopy => "issued-copy",
+                _ => null,
+            };
+            if (role is null)
             {
                 result.Attestations.Add(new AttestationRecord { File = file, PredicateType = type, Outcome = "ignored", Reason = "unknown predicate type" });
                 continue;
             }
 
-            var role = type == AttestationFormats.PredicatePackage ? "package" : "review";
-            var (outcome, signer, reason, ids, reviewers) = AttestationFormats.VerifySignatureWithScope(parsed, options.TrustRoot, role, now, options.SigstoreVerifier);
-            var record = new AttestationRecord
-            {
-                File = file,
-                PredicateType = type,
-                Role = role,
-                Format = parsed.Format,
-                Outcome = outcome,
-                Signer = signer,
-                Reason = reason,
-            };
+            var record = new AttestationRecord { File = file, PredicateType = type, Role = role, Format = parsed.Format, Outcome = "pending" };
             result.Attestations.Add(record);
-            switch (outcome)
+            pending.Add((file, parsed, role, record));
+        }
+
+        // Attestations §7.1, pass 1: issued-copy attestations, before the others.
+        var passed = new List<(AttestationRecord Record, string File, string Signer, IssuedCopyCheck Check)>();
+        foreach (var (file, parsed, role, record) in pending.Where(p => p.Role == "issued-copy"))
+        {
+            if (Signature(file, parsed, role, record, options, now, diagnostics) is not { } sig)
             {
-                case "unverifiable":
-                    diagnostics.Add(DiagnosticCodes.A003AttestationUnverifiable, $"{role} attestation not checked: {reason}", file);
-                    continue;
-                case "indeterminate":
-                    diagnostics.Add(DiagnosticCodes.A004AttestationIndeterminate, reason ?? "online verification could not complete", file);
-                    continue;
-                case "invalid":
-                    diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {reason}", file);
-                    continue;
+                continue;
             }
 
+            var check = IssuedCopies.Check(parsed.Statement, sig, result.Manifest!, result.Digest!, result.FileDigests, !diagnostics.Has(DiagnosticCodes.M002ManifestSchema));
+            if (check.Error is not null)
+            {
+                Invalid(record, file, $"issued-copy attestation: {check.Error}", diagnostics);
+                continue;
+            }
+
+            passed.Add((record, file, sig.Signer!, check));
+        }
+
+        IssuedCopyCheck? issued = null;
+        if (passed.Count > 0 && passed.All(p => IssuedCopies.Same(p.Check, passed[0].Check)))
+        {
+            issued = passed[0].Check;
+            result.IssuedCopy = new IssuedCopy(issued.Original!, [.. passed.Select(p => p.Signer)], [.. issued.Changed!.Keys.Order(StringComparer.Ordinal)]);
+        }
+        else
+        {
+            // Several that disagree are each A002, and none is used.
+            foreach (var p in passed)
+            {
+                Invalid(p.Record, p.File, "issued-copy attestations disagree on original or changedFiles; none is used", diagnostics);
+            }
+        }
+
+        // Pass 2: package attestations against the rebuilt original digest when there is an issued copy.
+        var digest = issued?.Original ?? result.Digest!;
+        foreach (var (file, parsed, role, record) in pending.Where(p => p.Role != "issued-copy"))
+        {
+            if (Signature(file, parsed, role, record, options, now, diagnostics) is not { } sig)
+            {
+                continue;
+            }
+
+            var signer = sig.Signer;
+            var reviewers = sig.Reviewers;
             if (role == "package")
             {
-                var mismatch = AttestationFormats.CheckPackageStatement(parsed.Statement, result.Id, result.Version, result.Digest!);
+                var mismatch = AttestationFormats.CheckPackageStatement(parsed.Statement, result.Id, result.Version, digest);
                 if (mismatch is not null)
                 {
                     record.Outcome = "invalid";
@@ -228,14 +316,14 @@ public static partial class MocaReader
                     // Attestations §3: a statement naming this id@version with another digest is positive evidence that
                     // the content changed after signing.
                     var subjects = parsed.Statement["subject"] as JsonArray;
-                    var tampered = subjects is { Count: 1 } && JsonValues.StringOf(subjects[0]?["name"]) == $"{result.Id}@{result.Version}";
+                    var tampered = subjects is { Count: 1 } && JsonValues.StringOf((subjects[0] as JsonObject)?["name"]) == $"{result.Id}@{result.Version}";
                     diagnostics.Add(tampered ? DiagnosticCodes.A008PackageDigestMismatch : DiagnosticCodes.A002AttestationInvalid,
                         $"package attestation does not match this package: {mismatch}", file);
                 }
                 else
                 {
                     result.Signers.Add(signer!);
-                    result.RelationScopes.AddRange(ids);
+                    result.RelationScopes.AddRange(sig.Ids);
                 }
 
                 continue;
@@ -269,22 +357,33 @@ public static partial class MocaReader
                 continue;
             }
 
+            // Attestations §7.1: in an issued copy, a review of the publisher's bytes of a changed file is listed with
+            // fileChanged and never counts; it is not outdated.
+            var subjectsByName = (parsed.Statement["subject"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(x => (Name: JsonValues.StringOf(x["name"]), Sha: JsonValues.StringOf((x["digest"] as JsonObject)?["sha256"])))
+                .ToList();
+            bool Changed(string path) =>
+                issued is not null
+                && issued.Changed!.TryGetValue(UnicodeText.Normalize(path, NormalizationForm.FormC), out var original)
+                && subjectsByName.Any(x => x.Name == path && x.Sha == original);
+            var fileChanged = review.Outdated.Where(Changed).ToList();
             record.Current = review.Current;
-            record.Outdated = review.Outdated;
-            foreach (var path in review.Outdated)
+            record.Outdated = [.. review.Outdated.Where(p => !Changed(p))];
+            foreach (var path in record.Outdated)
             {
                 diagnostics.Add(DiagnosticCodes.A006ReviewOutdated, $"review of {path} no longer matches the file", file);
             }
 
             var predicate = review.Predicate!;
-            foreach (var path in review.Current)
+            foreach (var path in review.Current.Concat(fileChanged))
             {
                 var entry = new AttestedReview(
                     JsonValues.StringOf(predicate["reviewer"]) ?? "",
                     JsonValues.StringOf(predicate["reviewedAt"]) ?? "",
                     JsonValues.StringOf(predicate["outcome"]) ?? "",
                     signer!,
-                    JsonValues.StringOf(predicate["scope"]));
+                    JsonValues.StringOf(predicate["scope"]),
+                    fileChanged.Contains(path) ? true : null);
                 var key = UnicodeText.Normalize(path, NormalizationForm.FormC);
                 if (!result.ReviewsByFile.TryGetValue(key, out var list))
                 {
@@ -313,6 +412,36 @@ public static partial class MocaReader
         }
     }
 
+    // Attestations §7 steps 6–7: the signature outcome, reported; the check when it is valid, else null.
+    private static SignatureCheck? Signature(string file, AttestationFormats.Parsed parsed, string role, AttestationRecord record, ReadOptions options, DateTimeOffset now, DiagnosticBag diagnostics)
+    {
+        var sig = AttestationFormats.CheckSignature(parsed, options.TrustRoot, role, now, options.SigstoreVerifier);
+        record.Outcome = sig.Outcome;
+        record.Signer = sig.Signer;
+        record.Reason = sig.Reason;
+        switch (sig.Outcome)
+        {
+            case "unverifiable":
+                diagnostics.Add(DiagnosticCodes.A003AttestationUnverifiable, $"{role} attestation not checked: {sig.Reason}", file);
+                return null;
+            case "indeterminate":
+                diagnostics.Add(DiagnosticCodes.A004AttestationIndeterminate, sig.Reason ?? "online verification could not complete", file);
+                return null;
+            case "invalid":
+                diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {sig.Reason}", file);
+                return null;
+            default:
+                return sig;
+        }
+    }
+
+    private static void Invalid(AttestationRecord record, string file, string reason, DiagnosticBag diagnostics)
+    {
+        record.Outcome = "invalid";
+        record.Reason = reason;
+        diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, reason, file);
+    }
+
     // Package spec §7.2: supersedes and conflictsWith take effect only when a signer may speak for the target.
     private static void CheckRelationAuthority(PackageResult result, DiagnosticBag diagnostics)
     {
@@ -338,6 +467,7 @@ public static partial class MocaReader
     {
         // Cycles are detected by id@version: composing another version of the same package is not a cycle.
         var self = $"{result.Id}@{result.Version}";
+        var listed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var member in members)
         {
             var memberId = JsonValues.StringOf(member["id"]);
@@ -351,6 +481,12 @@ public static partial class MocaReader
             var entry = new PackageMember { Reference = reference };
             result.Members.Add(entry);
             if (options.ResolveMember is null)
+            {
+                continue;
+            }
+
+            // Contract §3: a repeat of a member id (M005) is not resolved.
+            if (!listed.Add(memberId))
             {
                 continue;
             }
@@ -370,21 +506,34 @@ public static partial class MocaReader
                 continue;
             }
 
-            if (budget.Resolved >= options.Limits.MaxMembers)
+            // Contract §3: a pin met again in the same read shares the first read's result and counts once.
+            var pin = (memberId, reference.Version, digest);
+            if (!budget.Members.TryGetValue(pin, out var child))
             {
-                diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: more than {options.Limits.MaxMembers} members in one read", PackageDigest.ManifestFile);
-                continue;
+                if (budget.Resolved >= options.Limits.MaxMembers)
+                {
+                    diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: more than {options.Limits.MaxMembers} members in one read", PackageDigest.ManifestFile);
+                    continue;
+                }
+
+                if (budget.Bytes > options.Limits.MaxMemberBytes)
+                {
+                    diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberKey} is not resolved: the members read so far hold more than {options.Limits.MaxMemberBytes} bytes", PackageDigest.ManifestFile);
+                    continue;
+                }
+
+                budget.Resolved++;
+                var target = await options.ResolveMember(reference, cancellationToken).ConfigureAwait(false);
+                child = target is null ? null : await ReadInternalAsync(target, options, [.. stack, self], budget, cancellationToken).ConfigureAwait(false);
+                budget.Members[pin] = child;
             }
 
-            budget.Resolved++;
-            var target = await options.ResolveMember(reference, cancellationToken).ConfigureAwait(false);
-            if (target is null)
+            if (child is null)
             {
                 diagnostics.Add(DiagnosticCodes.R001MemberUnresolved, $"member {memberId}@{reference.Version} could not be resolved", PackageDigest.ManifestFile);
                 continue;
             }
 
-            var child = await ReadInternalAsync(target, options, [.. stack, self], budget, cancellationToken).ConfigureAwait(false);
             entry.Result = child;
             if (child.Diagnostics.Any(d => d.Code == DiagnosticCodes.R003MemberCycle))
             {
@@ -398,10 +547,12 @@ public static partial class MocaReader
                     $"member pinned as {memberId}@{reference.Version} resolved to {child.Id}@{child.Version}", PackageDigest.ManifestFile);
                 entry.Status = "mismatch";
             }
-            else if (child.Digest != digest)
+            else if (child.Digest != digest && child.IssuedCopy?.OriginalDigest != digest)
             {
+                // Package spec §7.1: an issued copy matches through the original digest it verified with, and only then.
+                var copy = child.IssuedCopy is null ? "" : $" (an issued copy of {child.IssuedCopy.OriginalDigest})";
                 diagnostics.Add(DiagnosticCodes.R002MemberDigestMismatch,
-                    $"member {memberId}@{reference.Version} has digest {child.Digest ?? "(none)"}, but {digest} is pinned", PackageDigest.ManifestFile);
+                    $"member {memberId}@{reference.Version} has digest {child.Digest ?? "(none)"}{copy}, but {digest} is pinned", PackageDigest.ManifestFile);
                 entry.Status = "mismatch";
             }
             else
@@ -418,6 +569,16 @@ public static partial class MocaReader
         if (!result.Valid)
         {
             return result;
+        }
+
+        if (result.PendingCatalogue is { } catalogue)
+        {
+            result.Images = catalogue.Images;
+            result.Translations = catalogue.Translations;
+            result.Tags = catalogue.Tags;
+            result.Publisher = catalogue.Publisher;
+            result.Url = catalogue.Url;
+            result.Contributors = catalogue.Contributors;
         }
 
         var capabilities = new SortedSet<string>(StringComparer.Ordinal) { "core" };
@@ -443,7 +604,13 @@ public static partial class MocaReader
                     capabilities.Add("localized");
                 }
 
-                if (result.ReviewsByFile.TryGetValue(rep.File, out var reviewsOfFile))
+                // Attestations §7.1: an issued copy whose issuer changed a reviewed file is not reviewed.
+                if (result.ReviewsByFile.TryGetValue(rep.File, out var allReviews) && allReviews.Any(r => r.FileChanged == true))
+                {
+                    allApproved = false;
+                }
+
+                if (result.ReviewsByFile.TryGetValue(rep.File, out var reviewsOfFile) && reviewsOfFile.Any(r => r.FileChanged != true))
                 {
                     reviewedFiles++;
                     if (Reviews.StatusOf(reviewsOfFile, result.Signers.Count > 0) != "approved")
@@ -485,9 +652,17 @@ public static partial class MocaReader
     }
 
     /// <summary>Members resolved so far in one read, shared by every level (package spec §7.1).</summary>
+    /// <summary>Contract §3: what one read has spent on members, and each member read so far, by pin.</summary>
     private sealed class MemberBudget
     {
         public int Resolved { get; set; }
+
+        public long Bytes { get; set; }
+
+        public Dictionary<(string Id, string? Version, string Digest), PackageResult?> Members { get; } = [];
+
+        /// <summary>The evidence budget, shared by the package and every member it reads.</summary>
+        public ContentReader.EvidenceSpend Evidence { get; } = new();
     }
 
     /// <summary>Compares a matched <c>major.minor</c> with a version string, numerically and without overflow.</summary>

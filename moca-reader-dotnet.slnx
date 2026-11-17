@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/OpenMoca.Reader.Age/OpenMoca.Reader.Age.csproj" />
     <Project Path="src/OpenMoca.Reader.AgentFramework/OpenMoca.Reader.AgentFramework.csproj" />
     <Project Path="src/OpenMoca.Reader.Extensions.AI/OpenMoca.Reader.Extensions.AI.csproj" />
     <Project Path="src/OpenMoca.Reader.Onnx/OpenMoca.Reader.Onnx.csproj" />

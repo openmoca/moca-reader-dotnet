@@ -9,7 +9,7 @@ public sealed class VendoredSchemaTests
     public static TheoryData<string> Names() =>
     [
         MocaSchemas.Manifest, MocaSchemas.Node, MocaSchemas.CitationRecord, MocaSchemas.SidecarIndex,
-        MocaSchemas.ReviewPredicate, MocaSchemas.TrustRoot, MocaSchemas.SearchHit, MocaSchemas.Structure,
+        MocaSchemas.ReviewPredicate, MocaSchemas.TrustRoot, MocaSchemas.SearchHit, MocaSchemas.Structure, MocaSchemas.MocaEnc,
     ];
 
     [Theory]

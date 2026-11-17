@@ -3,6 +3,201 @@
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.7.0] - 2026-11-15
+
+For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5) and
+[moca-spec#7](https://github.com/openmoca/moca-spec/issues/7) and
+[moca-spec#8](https://github.com/openmoca/moca-spec/issues/8) and
+[moca-spec#9](https://github.com/openmoca/moca-spec/issues/9)).
+
+### Added (credits: package spec §4.13)
+
+- `PackageResult.Publisher` (`PackagePublisher`), `Url` and `Contributors` (`Contributor`), as written, when the
+  package is valid; `CitationNode.Contributors` from a node's `moca.contributors`. A credit's image is checked as a
+  manifest image (`M010`) and left out when it fails. Credits are labels, not proof. Embedded manifest, node and
+  citation-record schemas updated; `publisher` as a string now fails the schema (`M002`).
+
+### Changed (alternative labels and ingress narrowing: package spec §5.6, Reader contract §9.2, §9.4)
+
+- `skos:altLabel` is read: concepts carry `altLabels` by language, in the order read, each once; the default
+  ontology-guided ingress matches a preferred or an alternative label, as written.
+- Concepts or a scope an ingress hook sets now narrow the search under composition and with backends that have no
+  pushdown: resolved hits are narrowed after the backend, before the egress hook and the gate, on every round.
+- A store search takes a structure source (`MocaSearch.StructureSource`): a library whose structure the hooks see and `scope` follows.
+
+### Changed (filters come before the limit: Reader contract §9.2)
+
+- `MocaSearch` returns the best `limit` records that pass the gate, however far down the unfiltered ranking they are.
+  The fixed cap of 200 candidates is gone: it asks the backend again, doubling the request, until `limit` records pass
+  or the backend returns fewer hits than asked. An egress hook runs again on each larger candidate list.
+- New property `MocaSearch.MaxCandidates`: the host's bound on one call. A call it stops reports
+  `S010_SEARCH_TRUNCATED` (warning) in `Diagnostics`. Null by default.
+- `LexicalBackend` and `MemoryStoreBackend` score over every representation of the loaded packages, then apply the
+  filters, so a pushed-down filter never changes a score. `SearchFilters.Accept` carries the search's own check for
+  `upTo` and for concepts bound by composition; the lexical and dense backends apply it, so such a search usually
+  needs one request.
+- `HybridBackend` fuses each backend's whole ranking before filters, and keeps it for the rest of one search call;
+  `DenseBackend` embeds a query once however often it is asked again.
+- OpenMoca.Reader.VectorData: `VectorStoreBackend` asks the store for up to 10,000 results (was 200) and reports
+  `S010_SEARCH_TRUNCATED` in its `Diagnostics` when a search needs more.
+
+### Added (podcast and video series content: package spec §4.12, §5.6, §5.7, §7.1–§7.3; sidecar spec §5)
+
+- Media descriptions (`moca.media`): validated (`C005`, `C006`), exposed as `node.media`, never fetched. A time range
+  that cites hosted media is checked against its `transcript` and counts toward `self-contained-evidence`.
+- Time ranges must also end within the media: at or before the latest cue end, or the declared duration when later.
+- `datePublished` on the result and `package.datePublished` on records; the node's own `node.datePublished`.
+- Binding by composition: a composing package's structure binds its resolved members' records for `concepts`,
+  `scope`, `upTo` and the structure operation `nodes()`; `upTo` limits the members of a package whose reading
+  order places it. Package states carry `composition`, so store searches agree. With bindings loaded, the `concepts` filter is applied in the gate only.
+- `isPartOf` is a core relation type; `R005_RELATION_TYPE_UNKNOWN` (info) for other undefined types.
+- An issued copy matches a member pin, and binds the publisher's sidecar, through its verified original digest. Items of
+  changed files are replaced by whole-body chunks without vectors (`S009_SIDECAR_ITEMS_REPLACED`).
+- Alternate media (package spec §5.7): `alternateOf` and `sync` in `moca.media`, validated (`C005` for an
+  invalid alternate) and carried in `node.media`. A time range on an alternate with no transcript is checked through its
+  reference's transcript. `Alternates.MapTime(record, from, to, t)` maps a moment between alternates.
+- `maxMembers` defaults to 4,096 (was 256).
+- A refined quote is located in linear time (one Knuth-Morris-Pratt pass, constant-time spans); `located` runs from
+  the earliest start to the latest end of the touched cues; white space means the five ASCII characters.
+- An open-ended range on an alternate runs to the end of its stretch, and a range must end within the alternate's own
+  duration. A repeat of a member id (M005) is not resolved. `.inf`, `.nan` and numbers too large to be finite are
+  neither numbers nor strings.
+- A media time range may carry a `TextQuoteSelector` as its `refinedBy` (contract §7): it matches when the range does
+  and the quote is in the cues the range covers, white space collapsed. `evidence[].located` gives the cue-precise
+  span, the shortest of several occurrences, also through alternates.
+- A composer's reading order limits a member only when the composer's signers' `ids` cover the member's `id`, or the
+  host sets `allowUnsignedRelations` (contract §9).
+- Contract §3: a member met more than once in one read is resolved and read once, and shared; it counts once.
+  New limit `maxMemberBytes` (1 GiB) on the bytes of all the members one read reads. A reading order is walked once,
+  and bindings by composition keep only direct bindings and the links above them, so both take linear work. Package
+  states carry that form.
+- `upTo` limits a member's records by their own concepts on every composer's reading order, bound by composition
+  or not.
+- A source whose `id` is not a string has no `id` in every lookup.
+- Frontmatter whose `sources` has two entries with the same `id` is `C002_FRONTMATTER_INVALID` (package spec
+  §5.1), so the node is not read. Before, this Reader used the first entry.
+- Contract §3: the evidence budgets (`maxEvidenceChecksPerPackage`, `maxEvidenceBytesPerPackage`) cover the whole
+  read, so a package and its members share them. Each transcript's cues are parsed once per package, not once per
+  time range checked.
+- An octal or hex integer beyond 64 bits is read as a number, or as `.inf` is when too large for a finite double
+  (package spec §5.1); reading it never throws, and `0x8000000000000000` is positive. A number that is not finite
+  may be a mapping key: its text is the key, and the node is read. An integer beyond 64 bits is rounded once to
+  the nearest double. Schema errors name only the deepest failing places, and of a failing `oneOf` or `anyOf`
+  only the branch that got furthest; a branch of one that passed is never reported.
+
+### Changed (encrypted packages: hardening)
+
+- Opening an envelope never throws to the caller: an unexpected failure is
+  `E006` while parsing the header and `E002` after. Only the host's own
+  cancellation escapes, decided by the host's token: an
+  `OperationCanceledException` from a key provider or decryptor (its own
+  timeout) is a failure like any other.
+- `ReaderLimits.MaxScryptWorkFactor` must be from 1 to 22
+  (`ArgumentOutOfRangeException` when the limits are made, before any read);
+  `AgeDecryptor.ParseHeader`
+  refuses any other value too, so the work-factor shift cannot overflow.
+- `AgeDecryptor.FindFileKey` tries a key's kinds in order (identities,
+  passphrase, file key) and verifies the header MAC for each; a null identity
+  or a file key that is not 16 bytes is `E002`. `UnwrapFileKey` is gone.
+- The plaintext length is computed from the payload length before any
+  decryption (`AgeDecryptor.PlaintextLength`: `T003` over `MaxBytes`, `E003`
+  when impossible), and the payload is decrypted straight into one array of
+  that size. The header is parsed from its first 64 KiB + 16 bytes only.
+- A key provider's error message never appears in a diagnostic; only its type.
+- Key material and partial plaintext are zeroed after use.
+- At most 256 recipient stanzas (`E006`).
+- Zip64: the raw central-directory parse reads the Zip64 end record, and an
+  envelope entry it cannot find is `E005`, never assumed to be stored.
+- Tests: the hybrid CCTV vectors run parse-only; key results; limits; the
+  header size; a Zip64 envelope; CI installs the Go age CLI and requires it on
+  Linux.
+
+### Added (attestations §3a and §7.1: issued copies)
+
+- Issued-copy attestations (`AttestationFormats.PredicateIssuedCopy`) are
+  verified first, with the trust-root role `issued-copy` (which needs `ids`)
+  and the publisher's consent in `issuedCopies` (`IssuedCopies.Check`). The
+  Reader rebuilds the original digest (`IssuedCopies.RebuiltDigest`), and
+  package attestations are then checked against it. Every failure is `A002`.
+- `PackageResult.IssuedCopy` (`OriginalDigest`, `Issuers`, `ChangedFiles`).
+  Citation records carry `package.issuedCopy` and `node.issuedChange`;
+  reviews of changed files are listed with `fileChanged: true` and never
+  count, and such a copy is not `reviewed`.
+- `Library.Add`: a second issued copy of the same original is
+  `L002_ISSUED_COPY_DUPLICATE` (info), not `L001`.
+- `PackageState.IssuedCopy`, so a store search recomputes it.
+- `AttestationFormats.CheckSignature` returns the verifying key or Sigstore
+  identity; `Dsse.Ed25519KeyBytes` compares keys as bytes. The manifest,
+  trust-root and citation-record schemas are copied from moca-spec.
+
+### Added (package spec §4.10, Reader contract §9)
+
+- `PackageResult.ReadingOrder` when the manifest's `readingOrder` names an
+  ordered collection with a member list in the package's own
+  `structure.ttl`; otherwise `M014_READING_ORDER_UNRESOLVED` (warning) and
+  it is ignored.
+- `SearchOptions.UpTo`: in a package whose reading order has it as a member,
+  records bound to a concept placed after it are left out. Records off the
+  reading order, and other packages, are not limited. It runs in the gate
+  and follows the caller only.
+- `PackageState.ReadingOrder` (`Structure.ReadingOrder`), so a store search
+  applies `UpTo` too.
+
+### Added (package spec §4.9)
+
+- `PackageResult.Apps`, as declared, when the manifest passes its schema.
+  Advice only: the Reader never fetches, resolves or opens an app URI.
+  `apps` may be an outline property of an envelope.
+
+### Added (package spec §4.6–4.8)
+
+- `PackageResult.Images` (`ManifestImage`), `Translations`
+  (`ManifestTranslation`) and `Tags`, set when the package is valid. Each
+  image is checked for presence, `ReaderLimits.MaxImageBytes` (default
+  1 MiB) and the PNG, JPEG or WebP signature of its type, never decoded
+  (`M010`). Translation keys must be declared locales (`M011`); repeated
+  tags are dropped (`M012`); translated alt text for an unknown image is
+  dropped (`M013`).
+- Envelopes: the opt-in cover copy (`outline/cover.png`, `.jpg` or
+  `.webp`), at most one and within `MaxImageBytes` (`E005`), checked
+  against the inner manifest's first cover (`E004`). `translations` and
+  `tags` may be outline properties.
+- The manifest and moca-enc schemas are copied from moca-spec; the
+  conformance adapter reports the three fields.
+
+### Added (encrypted packages §2–§6)
+
+- Envelopes: recognised by content in a Zip path or bytes (a `.moca.enc`
+  path is read as a Zip by its signature); the entry and marker checks; the
+  opening order of encrypted packages §5.2 through
+  `ReadOptions.EnvelopeDecryptor` and `ReadOptions.KeyProvider`; the outline
+  check; `PackageResult.Envelope`. `E001`–`E006` in `DiagnosticCodes`, and
+  the `E` family makes a package invalid.
+- `OpenMoca.Reader.Encryption`: `IEnvelopeDecryptor` and its types. The
+  core has no implementation; `OpenMoca.Reader.Age` adds
+  `AgeEnvelopeDecryptor`.
+- `ReaderLimits.MaxScryptWorkFactor` (default 20).
+- `SidecarBinder.BindEnvelopeAsync`: `index.age` through the same key
+  provider; a failure makes the sidecar unusable and never changes validity.
+- The moca-enc schema is embedded.
+
+### Added (encrypted packages §4)
+
+- `OpenMoca.Reader.Age`, a new package: decrypt-only age v1 on
+  BouncyCastle (already a dependency), not the platform-dependent BCL
+  `ChaCha20Poly1305`. X25519 and scrypt recipients, no plugins, no armor.
+  Strict header parsing (64 KiB cap, canonical base64, scrypt alone,
+  work-factor limit checked before scrypt runs, low-order shares refused),
+  constant-time MAC compare, and no plaintext before the whole payload
+  authenticates. `OpenMoca.Reader` never references it. Tested against
+  every applicable C2SP age test vector and against the Go age CLI on
+  moca-spec's envelope fixtures.
+
+### Added (package spec §4.1)
+
+- `PackageResult.Distribution`: the manifest's `distribution`, or `open`
+  when it has none; null when the manifest fails its schema. A label only.
+
 ## [0.6.0] - 2026-11-11
 
 ### Fixed (Agent Framework binding, audience)

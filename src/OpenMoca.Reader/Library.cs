@@ -48,6 +48,10 @@ public sealed class Library
     private readonly DiagnosticBag _diagnostics = new();
     private StructureIndex? _structure;
 
+    /// <summary>Whether the host allows unsigned packages to make relations and to limit their members (package spec
+    /// §7.2, Reader contract §9).</summary>
+    public bool AllowUnsignedRelations => _allowUnsignedRelations;
+
     /// <summary>Creates an empty library; overlays are parsed now and their problems reported as diagnostics.</summary>
     public Library(LibraryOptions? options = null)
     {
@@ -96,7 +100,15 @@ public sealed class Library
             // Contract §7: one id@version, one digest. A second digest is refused and reported.
             if (same.Result.Digest != result.Digest)
             {
-                _diagnostics.Add(DiagnosticCodes.L001IdentityConflict, $"{key} is already loaded with digest {same.Result.Digest}; {result.Digest} is refused");
+                // Package spec §13.5: a second issued copy of the same original is expected, and only noted.
+                if (same.Result.IssuedCopy?.OriginalDigest is { } original && original == result.IssuedCopy?.OriginalDigest)
+                {
+                    _diagnostics.Add(DiagnosticCodes.L002IssuedCopyDuplicate, $"{key} is already loaded as another issued copy of {original}; {result.Digest} is not loaded");
+                }
+                else
+                {
+                    _diagnostics.Add(DiagnosticCodes.L001IdentityConflict, $"{key} is already loaded with digest {same.Result.Digest}; {result.Digest} is refused");
+                }
             }
 
             return this;

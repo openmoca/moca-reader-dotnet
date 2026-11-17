@@ -215,4 +215,76 @@ public sealed class SearchTests
             return ValueTask.FromResult<IReadOnlyList<float[]>>([.. texts.Select(_ => new float[] { 1, 0 })]);
         }
     }
+
+    // Contract §9.2, "Filters come before the limit".
+    private const string Rf = "https://example.com/conformance/ranked-filter";
+
+    private static async Task<Library> RankedFilterAsync()
+    {
+        var dir = Path.Combine(MocaSpec.Conformance, "fixtures", "ranked-filter");
+        var result = await MocaReader.ReadPackageAsync(Path.Combine(dir, "course"), new ReadOptions { ResolveMember = MemberResolvers.Directories([dir]) }, TestContext.Current.CancellationToken);
+        return new Library(new LibraryOptions { AllowUnsignedRelations = true }).Add(result);
+    }
+
+    /// <summary>A backend that ignores every filter but honours the limit, and counts what it is asked for.</summary>
+    private sealed class Unfiltered(Library library) : ISearchBackend
+    {
+        private readonly LexicalBackend _lexical = new(library);
+
+        public List<int> Asked { get; } = [];
+
+        public BackendFeatures Features => BackendFeatures.Lexical;
+
+        public IReadOnlyList<Diagnostic> Diagnostics => [];
+
+        public ValueTask<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit, SearchFilters filters, CancellationToken cancellationToken)
+        {
+            Asked.Add(limit);
+            return _lexical.SearchAsync(query, limit, new SearchFilters(filters.Digests, []), cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task FiltersComeBeforeTheLimit_RecordsFarDownTheRankingAreFound()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = await RankedFilterAsync();
+        var everything = await new MocaSearch(library, new LexicalBackend(library)).SearchAsync("lantern", new SearchOptions { Limit = 1000 }, ct);
+        Assert.Equal(240, everything.ToList().FindIndex(r => r.Package.Id == $"{Rf}-step-1"));
+        var unfiltered = new Unfiltered(library);
+        foreach (ISearchBackend backend in new ISearchBackend[] { new LexicalBackend(library), unfiltered })
+        {
+            var records = await new MocaSearch(library, backend).SearchAsync("lantern", new SearchOptions { Limit = 6, UpTo = $"{Rf}-step-1" }, ct);
+            Assert.Equal(["a.md", "b.md", "c.md", "d.md", "e.md", "f.md"], records.Select(r => r.Node.Path));
+        }
+
+        // It asked again, doubling, until the limit was met.
+        Assert.Equal([18, 36, 72, 144, 288], unfiltered.Asked);
+    }
+
+    [Fact]
+    public async Task AHostBound_StopsASearch_AndReportsS010()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = await RankedFilterAsync();
+        var bounded = new MocaSearch(library, new Unfiltered(library)) { MaxCandidates = 100 };
+        Assert.Empty(await bounded.SearchAsync("lantern", new SearchOptions { Limit = 6, UpTo = $"{Rf}-step-1" }, ct));
+        Assert.Equal([DiagnosticCodes.S010SearchTruncated], bounded.Diagnostics.Select(d => d.Code));
+        var roomy = new MocaSearch(library, new Unfiltered(library)) { MaxCandidates = 300 };
+        Assert.Equal(6, (await roomy.SearchAsync("lantern", new SearchOptions { Limit = 6, UpTo = $"{Rf}-step-1" }, ct)).Count);
+        Assert.Empty(roomy.Diagnostics);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MocaSearch(library, new Unfiltered(library)) { MaxCandidates = 0 });
+    }
+
+    [Fact]
+    public async Task APushedDownFilter_NeverChangesAScore()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = await RankedFilterAsync();
+        var all = await new MocaSearch(library, new LexicalBackend(library)).SearchAsync("lantern", new SearchOptions { Limit = 1000 }, ct);
+        var scoreOf = all.ToDictionary(r => r.Node.Ref, r => r.Score);
+        var scoped = await new MocaSearch(library, new LexicalBackend(library)).SearchAsync("lantern", new SearchOptions { Limit = 6, Scope = $"{Rf}#topic" }, ct);
+        Assert.Equal(6, scoped.Count);
+        Assert.All(scoped, r => Assert.Equal(scoreOf[r.Node.Ref], r.Score));
+    }
 }

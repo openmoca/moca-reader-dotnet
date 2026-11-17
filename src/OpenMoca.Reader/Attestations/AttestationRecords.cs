@@ -25,7 +25,7 @@ public sealed class AttestationRecord
     public required string Outcome { get; set; }
 
     /// <summary>The signer's identity, when the signature verified.</summary>
-    public string? Signer { get; init; }
+    public string? Signer { get; set; }
 
     /// <summary>Why the outcome is not valid.</summary>
     public string? Reason { get; set; }
@@ -38,7 +38,29 @@ public sealed class AttestationRecord
 }
 
 /// <summary>A review that verified and matches a current file (citation record <c>attestedReviews</c>).</summary>
-public sealed record AttestedReview(string Reviewer, string ReviewedAt, string Outcome, string Signer, string? Scope = null);
+/// <param name="Reviewer">The OKF actor who reviewed.</param>
+/// <param name="ReviewedAt">When.</param>
+/// <param name="Outcome">accurate, needs-change or inaccurate.</param>
+/// <param name="Signer">Who signed the review.</param>
+/// <param name="Scope">What the review covered, if stated.</param>
+/// <param name="FileChanged">
+/// True for a review of a file the issuer of an issued copy changed (attestations §7.1). It never counts.
+/// </param>
+public sealed record AttestedReview(string Reviewer, string ReviewedAt, string Outcome, string Signer, string? Scope = null, bool? FileChanged = null);
+
+/// <summary>
+/// The outcome of checking an attestation's signature, with what the trust-root entry that verified it allows, and
+/// the key or Sigstore identity itself (for an issued copy's consent, package spec §4.11).
+/// </summary>
+public sealed record SignatureCheck(
+    string Outcome,
+    string? Signer,
+    string? Reason,
+    IReadOnlyList<string> Ids,
+    IReadOnlyList<string>? Reviewers,
+    string? PublicKey = null,
+    string? SigstoreIssuer = null,
+    string? SigstoreSubject = null);
 
 /// <summary>
 /// Detached attestations (attestations spec): DSSE envelopes (<c>*.dsse.json</c>) or Sigstore bundles
@@ -57,6 +79,9 @@ public static class AttestationFormats
 
     /// <summary>"This reviewer checked these exact node files."</summary>
     public const string PredicateReview = "https://w3id.org/moca/attestation/review/v1";
+
+    /// <summary>Attestations §3a: the issued-copy predicate type.</summary>
+    public const string PredicateIssuedCopy = "https://w3id.org/moca/attestation/issued-copy/v1";
 
     /// <summary>A parsed attestation: its container, envelope and statement.</summary>
     public sealed record Parsed(string Format, JsonObject Container, JsonObject Envelope, JsonObject Statement);
@@ -131,11 +156,21 @@ public static class AttestationFormats
     /// <param name="role"><c>package</c> or <c>review</c>.</param>
     /// <param name="now">The host clock, for key expiry.</param>
     /// <param name="sigstore">Verifies Sigstore bundles; null leaves them unverifiable.</param>
-    public static (string Outcome, string? Signer, string? Reason, IReadOnlyList<string> Ids, IReadOnlyList<string>? Reviewers) VerifySignatureWithScope(Parsed parsed, TrustRoot? trustRoot, string role, DateTimeOffset now, ISigstoreVerifier? sigstore = null)
+    public static (string Outcome, string? Signer, string? Reason, IReadOnlyList<string> Ids, IReadOnlyList<string>? Reviewers) VerifySignatureWithScope(Parsed parsed, TrustRoot? trustRoot, string role, DateTimeOffset now, ISigstoreVerifier? sigstore = null) =>
+        CheckSignature(parsed, trustRoot, role, now, sigstore) is var c ? (c.Outcome, c.Signer, c.Reason, c.Ids, c.Reviewers) : default;
+
+    /// <summary>As <see cref="VerifySignatureWithScope"/>, with the verifying key or Sigstore identity.</summary>
+    /// <param name="parsed">The parsed attestation.</param>
+    /// <param name="trustRoot">The host's trust root.</param>
+    /// <param name="role"><c>package</c>, <c>review</c> or <c>issued-copy</c>.</param>
+    /// <param name="now">The host clock, for key expiry.</param>
+    /// <param name="sigstore">Verifies Sigstore bundles; null leaves them unverifiable.</param>
+    public static SignatureCheck CheckSignature(Parsed parsed, TrustRoot? trustRoot, string role, DateTimeOffset now, ISigstoreVerifier? sigstore = null)
     {
+        ArgumentNullException.ThrowIfNull(parsed);
         if (trustRoot is null)
         {
-            return ("unverifiable", null, "no trust root was supplied", [], null);
+            return new("unverifiable", null, "no trust root was supplied", [], null);
         }
 
         if (parsed.Format == "dsse")
@@ -143,13 +178,17 @@ public static class AttestationFormats
             var result = Dsse.Verify(parsed.Envelope, keyId => trustRoot.Key(keyId, role, now)?.PublicKey);
             if (!result.Ok)
             {
-                return ("invalid", null, result.Reason, [], null);
+                return new("invalid", null, result.Reason, [], null);
             }
 
-            return ("valid", trustRoot.Key(result.KeyId!, role, now)?.Identity ?? result.KeyId, null, trustRoot.Ids(result.KeyId!), trustRoot.Reviewers(result.KeyId!));
+            var key = trustRoot.Key(result.KeyId!, role, now);
+            return new("valid", key?.Identity ?? result.KeyId, null, trustRoot.Ids(result.KeyId!), trustRoot.Reviewers(result.KeyId!), key?.PublicKey);
         }
 
-        return VerifySigstore(parsed, trustRoot, role, sigstore);
+        var (outcome, signer, reason, ids, reviewers) = VerifySigstore(parsed, trustRoot, role, sigstore);
+        var space = outcome == "valid" ? signer!.IndexOf(' ', StringComparison.Ordinal) : -1;
+        return new(outcome, signer, reason, ids, reviewers, null,
+            space > 0 ? signer![..space] : null, space > 0 ? signer![(space + 1)..] : null);
     }
 
     // Attestations §7, step 6: unverifiable when the trust root lists no Sigstore identities at all, when there is no

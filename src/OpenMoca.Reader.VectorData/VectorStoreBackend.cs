@@ -22,7 +22,12 @@ namespace OpenMoca.Reader.VectorData;
 public sealed class VectorStoreBackend<TKey> : ISearchBackend
     where TKey : notnull
 {
-    private const int MaxFetch = 200;
+    // Records deleted per round in RemoveAsync.
+    private const int DeleteBatch = 200;
+
+    // The most results asked of the store in one search. A search the Reader asks to go further (contract §9.2, filters
+    // come before the limit) stops here and reports S010_SEARCH_TRUNCATED, so a short result is never silent.
+    private const int MaxTop = 10_000;
 
     private readonly VectorStoreCollection<TKey, MocaStoreRecord<TKey>> _collection;
     private readonly IEmbedder _embedder;
@@ -65,7 +70,7 @@ public sealed class VectorStoreBackend<TKey> : ISearchBackend
     public BackendFeatures Features => BackendFeatures.Dense | (_filterPushdown ? BackendFeatures.FilterPushdown : BackendFeatures.None);
 
     /// <inheritdoc/>
-    public IReadOnlyList<Diagnostic> Diagnostics => [];
+    public IReadOnlyList<Diagnostic> Diagnostics { get; private set; } = [];
 
     /// <summary>
     /// Ingests every node representation (or sidecar chunk) of every loaded package. Keys come from each unit's
@@ -92,7 +97,7 @@ public sealed class VectorStoreBackend<TKey> : ISearchBackend
         while (true)
         {
             var keys = new List<TKey>();
-            await foreach (var record in _collection.GetAsync(r => r.Digest == digest, MaxFetch, cancellationToken: cancellationToken).ConfigureAwait(false))
+            await foreach (var record in _collection.GetAsync(r => r.Digest == digest, DeleteBatch, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 keys.Add(record.Key);
             }
@@ -122,7 +127,8 @@ public sealed class VectorStoreBackend<TKey> : ISearchBackend
             Filter = _filterPushdown ? Filter(filters) : null,
         };
         var hits = new List<SearchHit>();
-        await foreach (var result in _collection.SearchAsync(new ReadOnlyMemory<float>(q), Math.Min(limit, MaxFetch), options, cancellationToken).ConfigureAwait(false))
+        var top = Math.Min(limit, MaxTop);
+        await foreach (var result in _collection.SearchAsync(new ReadOnlyMemory<float>(q), top, options, cancellationToken).ConfigureAwait(false))
         {
             var r = result.Record;
             var record = JsonSerializer.Deserialize<CitationRecord>(r.Record, CitationJson.Options)!;
@@ -130,6 +136,14 @@ public sealed class VectorStoreBackend<TKey> : ISearchBackend
             var score = Math.Round(DenseBackend.Similarity(_distance, q, r.Vector?.ToArray() ?? []) * 1e4, MidpointRounding.AwayFromZero) / 1e4;
             hits.Add(new SearchHit(r.Digest, r.Node, record.Node.Path, r.Locale.Length == 0 ? null : r.Locale, record.Span, score, record));
         }
+
+        var findings = new DiagnosticBag();
+        if (limit > MaxTop && hits.Count == MaxTop)
+        {
+            findings.Add(DiagnosticCodes.S010SearchTruncated, $"the store was asked for at most {MaxTop} results");
+        }
+
+        Diagnostics = findings.Items;
 
         // A store's order for equal scores is its own; break ties the same way for every connector.
         return [.. hits

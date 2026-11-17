@@ -24,7 +24,15 @@ public sealed record SearchFilters(
     IReadOnlyList<string>? Audiences = null,
     string? Locale = null,
     IReadOnlyList<string>? Concepts = null,
-    bool AllowUnlabelled = false);
+    bool AllowUnlabelled = false)
+{
+    /// <summary>
+    /// The search's own candidate check for what has no pushdown filter: <c>upTo</c>, and concepts bound by
+    /// composition (Reader contract §9.2). A backend that knows it applies it after scoring; others ignore it, and the
+    /// gate still checks every candidate.
+    /// </summary>
+    public Func<SearchHit, bool>? Accept { get; init; }
+}
 
 /// <summary>Backend features (Reader interface §5.2).</summary>
 [Flags]
@@ -105,6 +113,12 @@ public sealed record SearchOptions
 
     /// <summary>Keep records bound to this concept or its descendants.</summary>
     public string? Scope { get; init; }
+
+    /// <summary>
+    /// A member of a package's reading order: leave out material that comes after it (Reader contract §9). Follows the
+    /// caller only; an ingress hook never changes it.
+    /// </summary>
+    public string? UpTo { get; init; }
 }
 
 /// <summary>What an ingress hook may change: the query, and the concepts or scope the backend searches.</summary>

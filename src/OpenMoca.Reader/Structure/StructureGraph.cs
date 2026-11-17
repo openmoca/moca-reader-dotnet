@@ -25,6 +25,9 @@ public sealed class ConceptEntry(string iri)
     /// <summary>Preferred labels by language tag ("" for none), in the order first stated.</summary>
     public OrderedDictionary<string, string> Labels { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Alternative labels by language tag (package spec §5.6): any number, in the order read, each once.</summary>
+    public OrderedDictionary<string, List<string>> AltLabels { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Definitions by language tag.</summary>
     public OrderedDictionary<string, string> Definitions { get; } = new(StringComparer.Ordinal);
 
@@ -43,6 +46,9 @@ public sealed class CollectionEntry(string iri, FactSource source)
 
     /// <summary>Members in list order.</summary>
     public List<string> Members { get; } = [];
+
+    /// <summary>Whether a layer states that this is a <c>skos:OrderedCollection</c>.</summary>
+    public bool Typed { get; internal set; }
 
     internal SortedDictionary<int, string> Positions { get; } = [];
 }
@@ -79,7 +85,7 @@ public sealed class StructureGraph
                     Concept(f.S).Declared ??= source;
                     break;
                 case "collection":
-                    CollectionFor(f.S, source);
+                    CollectionFor(f.S, source).Typed = true;
                     break;
                 case "member":
                     var collection = CollectionFor(f.S, source);
@@ -92,6 +98,22 @@ public sealed class StructureGraph
                 case "label":
                     Concept(f.S).Labels.TryAdd(f.Lang ?? "", f.Value ?? "");
                     break;
+                case "altLabel":
+                {
+                    var alts = Concept(f.S).AltLabels;
+                    if (!alts.TryGetValue(f.Lang ?? "", out var list))
+                    {
+                        alts[f.Lang ?? ""] = list = [];
+                    }
+
+                    if (!list.Contains(f.Value ?? "", StringComparer.Ordinal))
+                    {
+                        list.Add(f.Value ?? "");
+                    }
+
+                    break;
+                }
+
                 case "definition":
                     Concept(f.S).Definitions.TryAdd(f.Lang ?? "", f.Value ?? "");
                     break;
