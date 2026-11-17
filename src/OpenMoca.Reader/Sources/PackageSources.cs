@@ -260,9 +260,20 @@ internal sealed class ArchiveSource : IPackageSource
         Location = location;
         PackageSources.AssertNamesAreUtf8(archive);
         ZipArchive zip;
+        IReadOnlyCollection<ZipArchiveEntry> entries;
         try
         {
             zip = new ZipArchive(new MemoryStream(archive, writable: false), ZipArchiveMode.Read);
+            // The central directory is read on first use of Entries, so a damaged one is found here, not above.
+            try
+            {
+                entries = zip.Entries;
+            }
+            catch
+            {
+                zip.Dispose();
+                throw;
+            }
         }
         catch (InvalidDataException ex)
         {
@@ -271,14 +282,14 @@ internal sealed class ArchiveSource : IPackageSource
 
         using (zip)
         {
-            if (zip.Entries.Count > limits.MaxEntries)
+            if (entries.Count > limits.MaxEntries)
             {
                 throw new TargetException(DiagnosticCodes.T003ArchiveRejected,
-                    $"archive has {zip.Entries.Count} entries, over the {limits.MaxEntries} limit");
+                    $"archive has {entries.Count} entries, over the {limits.MaxEntries} limit");
             }
 
             long total = 0;
-            foreach (var entry in zip.Entries)
+            foreach (var entry in entries)
             {
                 var name = entry.FullName;
                 PackageSources.AssertSafeArchivePath(name);

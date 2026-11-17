@@ -78,6 +78,11 @@ public static partial class Frontmatter
             var line = (int)ex.Start.Line + 1;
             return new FrontmatterSplit(true, null, ex.Message, body, bodyOffset, line);
         }
+        catch (InvalidOperationException ex)
+        {
+            // YamlDotNet's scanner throws this, not a YamlException, on some malformed plain scalars. Found by fuzzing.
+            return new FrontmatterSplit(true, null, $"frontmatter is not valid YAML: {ex.Message}", body, bodyOffset, 1);
+        }
     }
 }
 

@@ -30,6 +30,11 @@
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.1" />
   </ItemGroup>
 
+  <!-- Fuzzing (fuzz/): the SharpFuzz harness only; nothing published depends on it. -->
+  <ItemGroup>
+    <PackageVersion Include="SharpFuzz" Version="2.3.0" />
+  </ItemGroup>
+
   <!-- Tests -->
   <ItemGroup>
     <PackageVersion Include="xunit.v3" Version="4.0.2" />

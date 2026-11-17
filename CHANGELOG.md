@@ -3,6 +3,22 @@
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [Unreleased]
+
+### Fixed (contract §3, found by fuzzing)
+
+- `ReadPackageAsync` no longer throws on two kinds of damaged input. An archive
+  whose end record counts more entries than its central directory holds is
+  T003 (the central directory is read lazily, so the error came after the
+  open check). Frontmatter on which YamlDotNet's scanner throws
+  `InvalidOperationException` is C002.
+
+### Added
+
+- Coverage-guided fuzzing with SharpFuzz and libFuzzer (`fuzz/`): archive
+  bytes, and one file of a valid package replaced. 60 seconds per target on
+  pull requests, 30 minutes nightly.
+
 ## [0.6.0] - 2026-11-11
 
 ### Fixed (Agent Framework binding, audience)
