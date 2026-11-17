@@ -113,6 +113,15 @@ public sealed class PackageResult
     /// <summary>Package spec §4.12: when the package was first published, as written; null when the manifest fails its schema or has none. Informative.</summary>
     public string? DatePublished { get; internal set; }
 
+    /// <summary>Package spec §4.13: who publishes the package, as written; null when absent or the package is invalid. The signer's claim, not proof.</summary>
+    public PackagePublisher? Publisher { get; internal set; }
+
+    /// <summary>Package spec §4.13: the work's own page, as written; null when absent or the package is invalid. Never fetched.</summary>
+    public string? Url { get; internal set; }
+
+    /// <summary>Package spec §4.13: the people and organisations credited for the package, as written; null when absent or the package is invalid. The signer's claim, not proof.</summary>
+    public IReadOnlyList<Contributor>? Contributors { get; internal set; }
+
     /// <summary>The resolved reading order, for search (Reader contract §9).</summary>
     internal OpenMoca.Reader.Structure.ReadingOrder? ResolvedReadingOrder { get; set; }
 

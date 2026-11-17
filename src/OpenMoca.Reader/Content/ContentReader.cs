@@ -115,10 +115,17 @@ internal static partial class ContentReader
                 continue;
             }
 
-            foreach (var error in MocaSchemas.Validate(MocaSchemas.Node, frontmatter))
+            var fieldErrors = MocaSchemas.Validate(MocaSchemas.Node, frontmatter);
+            foreach (var error in fieldErrors)
             {
                 diagnostics.Add(DiagnosticCodes.C005FieldInvalid, error, file);
             }
+
+            // Package spec §4.13: the node's own credits, when they match the node schema; images checked as in §4.6.
+            var contributors = (frontmatter["moca"] as JsonObject)?["contributors"] is JsonArray credits
+                && !fieldErrors.Any(e => e.StartsWith("/moca/contributors", StringComparison.Ordinal) || e.StartsWith("/moca ", StringComparison.Ordinal))
+                ? CatalogueChecks.Contributors(credits, "moca.contributors", bytes, limits.MaxImageBytes, diagnostics, file)
+                : null;
 
             CheckEvidenceSources(file, frontmatter, diagnostics);
             CheckWindow(file, frontmatter, diagnostics);
@@ -136,6 +143,7 @@ internal static partial class ContentReader
                 Sha256 = fileDigests.GetValueOrDefault(file),
                 EvidenceChecks = evidenceChecks,
                 Media = media,
+                Contributors = contributors,
             };
             if (!byKey.TryGetValue(key, out var node))
             {

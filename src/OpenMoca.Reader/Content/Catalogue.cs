@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Json;
 
@@ -20,9 +21,45 @@ public sealed record ManifestImage(string Src, string Role, string Type, string?
 public sealed record ManifestTranslation(
     string? Title, string? Description, IReadOnlyList<string>? Tags, IReadOnlyDictionary<string, string>? Alt);
 
-/// <summary>What the result exposes of images, translations and tags.</summary>
+/// <summary>A credit's picture (package spec §4.13): a package file under <c>media/</c>, checked as a manifest image.</summary>
+/// <param name="Src">A package path under <c>media/</c>.</param>
+/// <param name="Type"><c>image/png</c>, <c>image/jpeg</c> or <c>image/webp</c>.</param>
+/// <param name="Alt">Alt text in the default language; null when absent.</param>
+public sealed record CreditImage(
+    [property: JsonPropertyName("src")] string Src,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("alt")] string? Alt);
+
+/// <summary>Who publishes the package (package spec §4.13), as written. The signer's claim, not proof.</summary>
+/// <param name="Name">The name to show.</param>
+/// <param name="Url">The publisher's own page; null when absent.</param>
+/// <param name="Description">A description in the default language; null when absent.</param>
+/// <param name="Image">The publisher's picture; null when absent or when it failed its check (M010).</param>
+/// <param name="SameAs">https: URIs of the same party elsewhere (ISNI, ORCID, Wikidata); null when absent.</param>
+public sealed record PackagePublisher(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("image")] CreditImage? Image,
+    [property: JsonPropertyName("sameAs")] IReadOnlyList<string>? SameAs);
+
+/// <summary>A person or organisation credited for the work (package spec §4.13), as written. The signer's claim, not proof.</summary>
+/// <param name="Name">The name to show.</param>
+/// <param name="Roles">MARC relator codes, such as <c>aut</c>, <c>nrt</c> or <c>hst</c>.</param>
+/// <param name="Url">The contributor's own page; null when absent.</param>
+/// <param name="Image">The contributor's picture; null when absent or when it failed its check (M010).</param>
+/// <param name="SameAs">https: URIs of the same party elsewhere (ISNI, ORCID, Wikidata); null when absent.</param>
+public sealed record Contributor(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("roles")] IReadOnlyList<string> Roles,
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("image")] CreditImage? Image,
+    [property: JsonPropertyName("sameAs")] IReadOnlyList<string>? SameAs);
+
+/// <summary>What the result exposes of images, translations, tags and credits.</summary>
 internal sealed record Catalogue(
-    IReadOnlyList<ManifestImage>? Images, IReadOnlyDictionary<string, ManifestTranslation>? Translations, IReadOnlyList<string>? Tags);
+    IReadOnlyList<ManifestImage>? Images, IReadOnlyDictionary<string, ManifestTranslation>? Translations, IReadOnlyList<string>? Tags,
+    PackagePublisher? Publisher = null, string? Url = null, IReadOnlyList<Contributor>? Contributors = null);
 
 /// <summary>Package spec §4.6–4.8: checks run once the manifest passes its schema.</summary>
 internal static class CatalogueChecks
@@ -53,6 +90,42 @@ internal static class CatalogueChecks
 
         return HasSignature(type, data) ? null : $"{src} does not start with the signature of {type}";
     }
+
+    /// <summary>
+    /// Package spec §4.13: a credit's picture, or null when it is absent or fails the check of §4.6 (M010, reported
+    /// against <paramref name="file"/>). The rest of the credit stands.
+    /// </summary>
+    private static CreditImage? CheckedImage(JsonNode? node, string where, IReadOnlyDictionary<string, byte[]> bytes, int maxImageBytes, DiagnosticBag diagnostics, string file)
+    {
+        if (node is not JsonObject image)
+        {
+            return null;
+        }
+
+        var src = JsonValues.StringOf(image["src"])!;
+        var type = JsonValues.StringOf(image["type"])!;
+        if (ImageProblem(src, type, bytes, maxImageBytes) is { } problem)
+        {
+            diagnostics.Add(DiagnosticCodes.M010ImageInvalid, $"{where}.image: {problem}; the image is left out", file);
+            return null;
+        }
+
+        return new CreditImage(src, type, JsonValues.StringOf(image["alt"]));
+    }
+
+    private static List<string>? Strings(JsonNode? node) =>
+        node is JsonArray array ? [.. array.Select(JsonValues.StringOf).OfType<string>()] : null;
+
+    /// <summary>Package spec §4.13: a publisher that passed its schema, as written, less an image that fails its check.</summary>
+    public static PackagePublisher Publisher(JsonObject p, IReadOnlyDictionary<string, byte[]> bytes, int maxImageBytes, DiagnosticBag diagnostics) =>
+        new(JsonValues.StringOf(p["name"])!, JsonValues.StringOf(p["url"]), JsonValues.StringOf(p["description"]),
+            CheckedImage(p["image"], "publisher", bytes, maxImageBytes, diagnostics, PackageDigest.ManifestFile), Strings(p["sameAs"]));
+
+    /// <summary>Package spec §4.13: contributors that passed their schema, as written, less images that fail their check.</summary>
+    public static List<Contributor> Contributors(JsonArray list, string where, IReadOnlyDictionary<string, byte[]> bytes, int maxImageBytes, DiagnosticBag diagnostics, string file) =>
+        [.. list.OfType<JsonObject>().Select((c, i) => new Contributor(
+            JsonValues.StringOf(c["name"])!, Strings(c["roles"]) ?? [], JsonValues.StringOf(c["url"]),
+            CheckedImage(c["image"], $"{where}[{i}]", bytes, maxImageBytes, diagnostics, file), Strings(c["sameAs"])))];
 
     /// <summary>Package spec §2: case-insensitive means A–Z and a–z only.</summary>
     private static string FoldAscii(string s) => string.Create(s.Length, s, (span, src) =>
@@ -148,6 +221,11 @@ internal static class CatalogueChecks
             }
         }
 
-        return new Catalogue(images, translations, tags);
+        // Package spec §4.13: credits, exposed as written; labels, not proof.
+        var publisher = manifest["publisher"] is JsonObject p ? Publisher(p, bytes, limits.MaxImageBytes, diagnostics) : null;
+        var contributors = manifest["contributors"] is JsonArray c
+            ? Contributors(c, "contributors", bytes, limits.MaxImageBytes, diagnostics, file)
+            : null;
+        return new Catalogue(images, translations, tags, publisher, JsonValues.StringOf(manifest["url"]), contributors);
     }
 }
