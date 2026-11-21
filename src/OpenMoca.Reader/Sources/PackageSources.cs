@@ -315,10 +315,18 @@ internal sealed class DirectorySource(string root, ReaderLimits? limits = null) 
     {
         var file = new FileInfo(Path.Combine([root, .. path.Split('/')]));
 
-        // Never follow a link swapped in after listing.
-        if (file.LinkTarget is not null || !file.Exists)
+        // Never follow a link swapped in after listing, and never open a pipe, device or socket: opening a named pipe
+        // waits for a writer.
+        if (file.LinkTarget is not null || !file.Exists || UnixFileType.IsSpecial(file.FullName))
         {
             throw new IOException($"{path} is no longer a regular file");
+        }
+
+        // An entry that reports no bytes is not opened: a regular empty file has none to read, and a named pipe that
+        // could not be told apart reports none too.
+        if (file.Length == 0)
+        {
+            return [];
         }
 
         var bytes = File.ReadAllBytes(file.FullName);
@@ -396,7 +404,7 @@ internal sealed class DirectorySource(string root, ReaderLimits? limits = null) 
             {
                 Visit(absolute, relative, entries);
             }
-            else if (info is FileInfo file && (file.Attributes & (FileAttributes.Device | FileAttributes.ReparsePoint)) == 0)
+            else if (info is FileInfo file && (file.Attributes & (FileAttributes.Device | FileAttributes.ReparsePoint)) == 0 && !UnixFileType.IsSpecial(absolute))
             {
                 entries.Add(new PackageEntry(relative, PackageEntryKind.File, file.Length));
             }
