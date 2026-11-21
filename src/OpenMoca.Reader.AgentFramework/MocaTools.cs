@@ -11,7 +11,9 @@ namespace OpenMoca.Reader.AgentFramework;
 /// The tools an agent uses to search, read and navigate MOCA packages: <c>moca_search</c>, <c>moca_get_node</c> and
 /// <c>moca_structure</c>, named and shaped as moca-mcp's. Every call goes through the host's <see cref="MocaSearch"/>,
 /// so the gate, the creator's terms and the host's audience filter apply, and a model cannot widen any of them. Results
-/// are data (Reader contract §12).
+/// are data (Reader contract §12). The terms request always has an <c>ai</c> part (Reader interface §7): structure
+/// answers come only from packages not closed for it (Reader contract §10), and a lookup of a node in a closed or
+/// hidden package gets the same answer as one in a package that is not loaded.
 /// </summary>
 public sealed class MocaTools
 {
@@ -26,12 +28,26 @@ public sealed class MocaTools
     /// The creator's terms applied to everything the tools return (Reader contract §15.4); null for a third party's
     /// model with no conditions (<see cref="TermsRequest.Provider"/>).
     /// </param>
-    public MocaTools(MocaSearch search, TermsRequest? terms = null)
+    /// <param name="allowNoAiTerms">
+    /// Lets <paramref name="terms"/> have no <c>ai</c> part, so the creator's <c>ai</c> terms remove nothing. Off by
+    /// default: a binding a model calls passes a request with an <c>ai</c> part (Reader interface §7).
+    /// </param>
+    /// <exception cref="ArgumentException"><paramref name="terms"/> has no <c>ai</c> part and <paramref name="allowNoAiTerms"/> is false.</exception>
+    public MocaTools(MocaSearch search, TermsRequest? terms = null, bool allowNoAiTerms = false)
     {
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
-        _terms = terms ?? TermsRequest.Provider;
+        _terms = Checked(terms ?? TermsRequest.Provider, allowNoAiTerms, nameof(terms));
     }
+
+    /// <summary>
+    /// Reader interface §7: a binding a model calls passes a terms request with an <c>ai</c> part, unless the host says
+    /// otherwise explicitly.
+    /// </summary>
+    internal static TermsRequest Checked(TermsRequest terms, bool allowNoAiTerms, string name) =>
+        terms.Ai is not null || allowNoAiTerms
+            ? terms
+            : throw new ArgumentException("A terms request handed to a model needs an ai part (Reader interface §7). Leave it null for a provider with no conditions, name the destination, or set allowNoAiTerms explicitly.", name);
 
     /// <summary>
     /// The tools as AI functions. Over a store backend, where there is no library to read nodes or structure from,
@@ -96,7 +112,8 @@ public sealed class MocaTools
         [Description("For requires and narrower: follow the relation all the way.")] bool transitive = false,
         [Description("For nodes: none, narrower, parts or both; also include nodes bound to descendants.")] string include = "none")
     {
-        var s = _search.Library!.Structure;
+        // Contract §10, "Under a terms request": labels, definitions and relations only from packages not closed for it.
+        var s = _search.Library!.StructureFor(_terms, _search.TermsLimits);
         JsonNode? result;
         switch (op)
         {

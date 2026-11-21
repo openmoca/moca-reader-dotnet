@@ -24,6 +24,13 @@ public sealed record MocaContextOptions
     /// <see cref="Search"/>, when set, takes its place for the turn's search.
     /// </summary>
     public TermsRequest Terms { get; init; } = TermsRequest.Provider;
+
+    /// <summary>
+    /// Lets <see cref="Terms"/>, or <see cref="SearchOptions.Terms"/> on <see cref="Search"/>, have no <c>ai</c> part,
+    /// so the creator's <c>ai</c> terms remove nothing. Off by default: a binding a model calls passes a request with an
+    /// <c>ai</c> part (Reader interface §7), and the provider refuses one without.
+    /// </summary>
+    public bool AllowNoAiTerms { get; init; }
 }
 
 /// <summary>
@@ -44,12 +51,22 @@ public sealed class MocaContextProvider : AIContextProvider
     private readonly IReadOnlyList<AITool> _tools;
 
     /// <summary>A provider over a search the host has set up: its backend, audiences and hooks.</summary>
+    /// <exception cref="ArgumentException">
+    /// The terms request has no <c>ai</c> part and <see cref="MocaContextOptions.AllowNoAiTerms"/> is false.
+    /// </exception>
     public MocaContextProvider(MocaSearch search, MocaContextOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
         _options = options ?? new MocaContextOptions();
-        _tools = _options.Tools ? new MocaTools(search, _options.Terms).All() : [];
+        ArgumentNullException.ThrowIfNull(_options.Terms, nameof(options));
+        MocaTools.Checked(_options.Terms, _options.AllowNoAiTerms, nameof(options));
+        if (_options.Search.Terms is { } turn)
+        {
+            MocaTools.Checked(turn, _options.AllowNoAiTerms, nameof(options));
+        }
+
+        _tools = _options.Tools ? new MocaTools(search, _options.Terms, _options.AllowNoAiTerms).All() : [];
     }
 
     /// <inheritdoc/>
