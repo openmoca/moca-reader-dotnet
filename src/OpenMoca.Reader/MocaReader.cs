@@ -37,10 +37,23 @@ public static partial class MocaReader
     /// <param name="target">A directory, archive or host source.</param>
     /// <param name="options">Host options; null for defaults.</param>
     /// <param name="cancellationToken">Cancels member resolution.</param>
-    public static Task<PackageResult> ReadPackageAsync(PackageTarget target, ReadOptions? options = null, CancellationToken cancellationToken = default)
+    public static async Task<PackageResult> ReadPackageAsync(PackageTarget target, ReadOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(target);
-        return ReadInternalAsync(target, options ?? new ReadOptions(), [], new MemberBudget(), cancellationToken);
+        options ??= new ReadOptions();
+        try
+        {
+            return await ReadInternalAsync(target, options, [], new MemberBudget(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Contract §11: a read never throws for what a package holds. Every known problem is reported where it is
+            // found; this is the backstop for anything else, which fails closed: the package is unreadable (P002) and
+            // invalid. The exception's text is not used, since it may hold a host's or a package's words.
+            var diagnostics = new DiagnosticBag(options.Strict);
+            diagnostics.Add(DiagnosticCodes.P002UnreadableEntry, $"the package could not be read ({ex.GetType().Name})");
+            return Finish(new PackageResult(), diagnostics);
+        }
     }
 
     private static async Task<PackageResult> ReadInternalAsync(
@@ -118,7 +131,7 @@ public static partial class MocaReader
             // Contract §11, M001: moca.json is UTF-8; invalid bytes are an error, not replaced.
             var text = StrictUtf8.GetString(bytes[PackageDigest.ManifestFile]).TrimStart('\ufeff');
             // I-JSON (RFC 7493): a repeated member name would let Readers disagree on `id`.
-            var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false });
+            var parsed = JsonValues.Parse(text, new JsonDocumentOptions { AllowDuplicateProperties = false });
             manifest = parsed as JsonObject;
             if (manifest is null)
             {

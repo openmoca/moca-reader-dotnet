@@ -106,7 +106,7 @@ public static class AttestationFormats
         JsonObject? container;
         try
         {
-            container = JsonNode.Parse(Encoding.UTF8.GetString(bytes)) as JsonObject;
+            container = JsonValues.Parse(Encoding.UTF8.GetString(bytes)) as JsonObject;
         }
         catch (JsonException)
         {
@@ -139,7 +139,7 @@ public static class AttestationFormats
         JsonObject? statement;
         try
         {
-            statement = JsonNode.Parse(Encoding.UTF8.GetString(payloadBytes), documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject;
+            statement = JsonValues.Parse(Encoding.UTF8.GetString(payloadBytes), new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject;
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
