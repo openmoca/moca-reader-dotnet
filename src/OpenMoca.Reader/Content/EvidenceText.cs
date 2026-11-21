@@ -45,9 +45,6 @@ public static partial class EvidenceText
     [GeneratedRegex(@"&(#x[0-9a-f]+|#[0-9]+|[a-z]+);", RegexOptions.IgnoreCase)]
     private static partial Regex Entity();
 
-    [GeneratedRegex(@"!?\[([^\]]*)\]\([^)]*\)")]
-    private static partial Regex MarkdownLink();
-
     [GeneratedRegex(@"^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*#{1,6}[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")]
     private static partial Regex HeadingMarker();
 
@@ -57,11 +54,14 @@ public static partial class EvidenceText
     [GeneratedRegex("[*_`]")]
     private static partial Regex Emphasis();
 
-    [GeneratedRegex(@"<(script|style)\b[^>]*>[\s\S]*?</\1[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*>", RegexOptions.IgnoreCase)]
-    private static partial Regex ScriptOrStyle();
+    [GeneratedRegex(@"<(script|style)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OpeningScriptOrStyle();
 
-    [GeneratedRegex("<[^>]*>")]
-    private static partial Regex Tag();
+    [GeneratedRegex(@"</script[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*>", RegexOptions.IgnoreCase)]
+    private static partial Regex ClosingScript();
+
+    [GeneratedRegex(@"</style[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*>", RegexOptions.IgnoreCase)]
+    private static partial Regex ClosingStyle();
 
     [GeneratedRegex(@"^(?:([0-9]+):)?([0-9]{1,2}):([0-9]{2}(?:\.[0-9]+)?)\z")]
     private static partial Regex ClockTime();
@@ -123,14 +123,162 @@ public static partial class EvidenceText
     /// </summary>
     public static string MarkdownText(string source)
     {
-        var linksDone = MarkdownLink().Replace(source, "$1");
+        var linksDone = LinkText(source);
         var lines = linksDone.Split('\n').Select(line => ListMarker().Replace(HeadingMarker().Replace(line, ""), ""));
         return Emphasis().Replace(string.Join('\n', lines), "");
     }
 
     /// <summary>HTML to text: script and style elements removed, tags removed, character references decoded.</summary>
     public static string HtmlText(string source) =>
-        DecodeEntities(Tag().Replace(ScriptOrStyle().Replace(source, ""), ""));
+        DecodeEntities(StripTags(StripScriptAndStyle(source)));
+
+    /// <summary>
+    /// A forward search for one character that remembers its last answer, so searches from rising positions cost one
+    /// pass over the text in all (contract §3: work is bounded by the size of what is read).
+    /// </summary>
+    internal sealed class ForwardFinder(string text, char needle)
+    {
+        private int _at = -2; // the last index found; -1 once there is none left
+
+        public int From(int from)
+        {
+            if (_at != -1 && _at < from)
+            {
+                _at = from >= text.Length ? -1 : text.IndexOf(needle, from);
+            }
+
+            return _at;
+        }
+    }
+
+    /// <summary>
+    /// Step 1 of the Markdown rules, in one pass: what replacing <c>!?\[([^\]]*)\]\([^)]*\)</c> with its first group
+    /// gives, without that expression's rescans from every <c>[</c>.
+    /// </summary>
+    internal static string LinkText(string source)
+    {
+        var open = new ForwardFinder(source, '[');
+        var close = new ForwardFinder(source, ']');
+        var paren = new ForwardFinder(source, ')');
+        var output = new StringBuilder(source.Length);
+        var pos = 0;
+        while (true)
+        {
+            var i = open.From(pos);
+            if (i < 0)
+            {
+                break;
+            }
+
+            var j = close.From(i + 1);
+            if (j < 0)
+            {
+                break;
+            }
+
+            var opensTarget = j + 1 < source.Length && source[j + 1] == '(';
+            var end = opensTarget ? paren.From(j + 2) : -1;
+            if (end < 0)
+            {
+                // No bracket between i and j opens a link either: they all close at j. With no ")" left after a "](",
+                // nothing later is a link.
+                if (opensTarget)
+                {
+                    break;
+                }
+
+                output.Append(source, pos, j + 1 - pos);
+                pos = j + 1;
+                continue;
+            }
+
+            var start = i > pos && source[i - 1] == '!' ? i - 1 : i;
+            output.Append(source, pos, start - pos).Append(source, i + 1, j - i - 1);
+            pos = end + 1;
+        }
+
+        return output.Append(source, pos, source.Length - pos).ToString();
+    }
+
+    /// <summary>Every <c>&lt;...&gt;</c> removed, in one pass: what replacing <c>&lt;[^&gt;]*&gt;</c> with nothing gives.</summary>
+    internal static string StripTags(string text)
+    {
+        var output = new StringBuilder(text.Length);
+        var pos = 0;
+        while (true)
+        {
+            var i = text.IndexOf('<', pos);
+            if (i < 0)
+            {
+                break;
+            }
+
+            var j = i + 1 < text.Length ? text.IndexOf('>', i + 1) : -1;
+            if (j < 0)
+            {
+                break;
+            }
+
+            output.Append(text, pos, i - pos);
+            pos = j + 1;
+        }
+
+        return output.Append(text, pos, text.Length - pos).ToString();
+    }
+
+    /// <summary>
+    /// script and style elements removed, in one pass: what replacing
+    /// <c>&lt;(script|style)\b[^&gt;]*&gt;[\s\S]*?&lt;/\1\s*&gt;</c> (ignoring case) with nothing gives.
+    /// </summary>
+    internal static string StripScriptAndStyle(string source)
+    {
+        var gt = new ForwardFinder(source, '>');
+        var unclosed = new Dictionary<string, bool>(StringComparer.Ordinal) { ["script"] = false, ["style"] = false };
+        var output = new StringBuilder(source.Length);
+        var pos = 0;
+        while (true)
+        {
+            var m = OpeningScriptOrStyle().Match(source, pos);
+            if (!m.Success)
+            {
+                break;
+            }
+
+            var name = m.Groups[1].Value.ToLowerInvariant();
+            var afterName = m.Index + m.Length;
+            var tagEnd = gt.From(afterName);
+            if (tagEnd < 0)
+            {
+                break;
+            }
+
+            var end = -1;
+            if (!unclosed[name])
+            {
+                var closing = (name == "script" ? ClosingScript() : ClosingStyle()).Match(source, tagEnd + 1);
+                end = closing.Success ? closing.Index + closing.Length : -1;
+                unclosed[name] = !closing.Success;
+            }
+
+            if (end < 0)
+            {
+                // Not closed: the opening tag stays, and the search goes on after its name.
+                if (unclosed["script"] && unclosed["style"])
+                {
+                    break;
+                }
+
+                output.Append(source, pos, afterName - pos);
+                pos = afterName;
+                continue;
+            }
+
+            output.Append(source, pos, m.Index - pos);
+            pos = end;
+        }
+
+        return output.Append(source, pos, source.Length - pos).ToString();
+    }
 
     /// <summary>
     /// WebVTT cues and their text: every cue's payload lines, cue tags removed and character references
@@ -154,7 +302,7 @@ public static partial class EvidenceText
             var arrow = timing.IndexOf("-->", StringComparison.Ordinal);
             var start = Seconds(timing[..arrow]);
             var end = Seconds(Whitespace().Split(UnicodeText.JsTrim(timing[(arrow + 3)..]))[0]);
-            var text = string.Join('\n', lines.Skip(at + 1).Select(l => DecodeEntities(Tag().Replace(l, ""))));
+            var text = string.Join('\n', lines.Skip(at + 1).Select(l => DecodeEntities(StripTags(l))));
             if (double.IsFinite(start) && double.IsFinite(end))
             {
                 cues.Add(new VttCue(start, end, text));
@@ -214,7 +362,7 @@ public static partial class EvidenceText
             var suffix = JsonValues.StringOf(selector["suffix"]) ?? "";
             // No whitespace or case folding (contract §7): one ordinal search for prefix + exact + suffix, the same
             // answer as checking each occurrence of exact, without rescanning the text for every one.
-            return text.Contains(prefix + exact + suffix, StringComparison.Ordinal);
+            return ContainsLinear(text, prefix + exact + suffix);
         }
 
         // Contract §7: a TextPositionSelector on its own proves only that its offsets are in range, so it is not
@@ -359,7 +507,12 @@ public static partial class EvidenceText
 
     /// <summary>Every start index of <paramref name="needle"/> in <paramref name="text"/>, overlapping ones included,
     /// in one linear pass (Knuth-Morris-Pratt).</summary>
-    public static List<int> Occurrences(string text, string needle)
+    public static List<int> Occurrences(string text, string needle) => Occurrences(text, needle, int.MaxValue);
+
+    /// <summary>Whether <paramref name="needle"/> occurs in <paramref name="text"/>, in linear time however they repeat.</summary>
+    internal static bool ContainsLinear(string text, string needle) => needle.Length == 0 || Occurrences(text, needle, 1).Count > 0;
+
+    private static List<int> Occurrences(string text, string needle, int limit)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(needle);
@@ -401,6 +554,11 @@ public static partial class EvidenceText
             if (k == m)
             {
                 output.Add(i - m + 1);
+                if (output.Count >= limit)
+                {
+                    break;
+                }
+
                 k = fail[k - 1];
             }
         }
