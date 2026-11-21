@@ -34,6 +34,9 @@ public static partial class MocaSchemas
     /// <summary>An envelope's moca-enc.json (encrypted packages §3).</summary>
     public const string MocaEnc = "moca-enc";
 
+    /// <summary>The creator's terms (package spec §4.14).</summary>
+    public const string Terms = "terms";
+
     private static readonly Lazy<Dictionary<string, JsonSchema>> Schemas = new(Load);
 
     private static readonly EvaluationOptions Options = new()
@@ -141,7 +144,7 @@ public static partial class MocaSchemas
     private static Dictionary<string, JsonSchema> Load()
     {
         // Each schema gets its own registry, so loading twice (tests, several readers) never collides.
-        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure, MocaEnc];
+        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure, MocaEnc, Terms];
         return names.ToDictionary(
             n => n,
             n => JsonSchema.FromText(Text(n), new BuildOptions { SchemaRegistry = new SchemaRegistry() }));
