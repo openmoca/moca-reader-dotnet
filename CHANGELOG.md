@@ -10,6 +10,85 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
 [moca-spec#8](https://github.com/openmoca/moca-spec/issues/8) and
 [moca-spec#9](https://github.com/openmoca/moca-spec/issues/9)).
 
+### Changed (limits, exact rules and signer binding)
+
+For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there and unit tests here.
+
+- **`ids` bind a signer to package ids** (moca-spec ADR-0040). A trust-root key or Sigstore identity with `ids` signs
+  only packages whose `id` its `ids` cover; otherwise `A010_SIGNER_NOT_FOR_PACKAGE` (error), the attestation is
+  `invalid`, and the package is not `signed` and does not meet `RequireSignature`. An entry without `ids` signs any id.
+- A signature counts only when its outcome is exactly `valid`; any other outcome from a verifier is `A002`.
+- **New limits** (contract §3): `ReaderLimits.MaxAttestations` (256) and `MaxAttestationBytes` (1 MiB), `A001` past
+  either; at most 16 signature entries in one DSSE envelope; and the members of every collection in a structure file,
+  added together, counted against `MaxTriples` (`O001`), a shared list walked once.
+- **Archives** (contract §3): one hand-written central-directory reader replaces `ZipArchive`. Exactly one end record,
+  no multi-disk or Zip64 archive, a directory that holds what it declares, and local headers whose name and method
+  match it, all checked before any entry is read (`T003`); declared sizes are summed before anything is inflated. An
+  entry is read only with method 0 or 8 and no encryption flag, and must give exactly its declared length and CRC-32
+  (`P002`). An archive too large to hold in memory is `T003`.
+- **Nesting** (contract §3): JSON and YAML front matter nest at most 64 levels, the outermost object, array or mapping
+  being level 1, fixed rather than left to a parser's default. Deeper text is refused as it is read, without
+  recursion, with the code its kind of file has for text that does not parse: `M001` for `moca.json`, `C002` for a
+  node's front matter (`C004` for a reserved file), `A001` for an attestation file or its statement, `E005` for
+  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` nested deeper
+  than 256 brackets is `O001`, checked in one pass before the Turtle parser runs.
+- **A read never throws for what a package holds**: a JSON string with an unpaired surrogate escape is invalid JSON
+  (I-JSON, RFC 7493): `M001`, `A001`, `E005` or `S001` by file; an unreadable envelope entry is `P002` and an unreadable
+  sidecar entry `S001`; image paths are normalised safely. Anything else unexpected becomes one `P002` and an invalid
+  result; only cancellation and programmer errors throw.
+- **Text work is linear**: links, HTML tags and quotes in node bodies and evidence sources are scanned in one pass
+  (with a Knuth-Morris-Pratt quote search), giving the same results as before; a link's target is copied only once
+  the link is known to close. The tests count the scanners' steps and bytes, not time. A link target in angle brackets loses
+  them, as in the reference Reader.
+- **Directory sources** read regular files only: a named pipe, device or socket is `P001`, and an entry that reports
+  no bytes is never opened.
+
+### Added (the creator's terms: package spec §4.14, Reader contract §15)
+
+- `PackageResult.Terms` (`PackageTerms`): the manifest's `terms` exactly as written (`Declared`), their problems
+  (`U001_TERMS_INVALID`, `U003_TERMS_UNKNOWN_VALUE`, each with the field's path; warnings, never `M002`), and the
+  `Authority`, `packager` or `unverified`, from the package's signatures only. `U002_TERMS_LOOSENED` for a node value
+  looser than the package's. The embedded terms schema does the checking; an age range or copyright year range out of
+  order, and two ratings under one scheme, are `U001` too.
+- Permissions are booleans under `ai.allowed` (`device`, `host`, `provider`, `training`, `machineTranslation`); provider
+  conditions are `noTraining` and `noRetention`. Every level only makes the platform defaults stricter: in 0.7.0 no
+  package can loosen them, so `ai.allowed.training: true` has no effect.
+- `SearchOptions.Terms` (`TermsRequest`: `AiRequest`, `RatingRequest`) applies the terms gate and gives each record its
+  resolved `terms` (`CitationTerms`: each field's value and the level that decided it, `platform`, `package`, `node`,
+  `composite` or `host`). `MocaSearch.TermsLimits` are the host's floors. Records removed are counted in
+  `U004_TERMS_EXCLUDED` (info). Without a terms request nothing changes. Package states carry the terms, so store
+  searches apply a request too.
+- The gate fails closed (contract §15.3, §15.4): a container in `terms` present with the wrong type (`ai`,
+  `ai.allowed`, `rights`, `rights.export`, `nodes`, a `nodes` entry) sets everything under it to its strictest; a
+  `nodes` value or entry that does not say which nodes it means counts for every node; a record rated only under a
+  scheme the host did not list is unrated; a malformed rating counts as explicit and outside every listed scheme; a
+  rating request with a member this version does not define removes every record (`RatingRequest.Unhonourable`). An
+  unknown destination is treated as `provider`.
+- Composition (contract §15.3 step 3): a composing package's stricter `ai` and export terms apply to a member's
+  records only when its signers' ids cover the member's id (as for `upTo`), or the host allows unsigned relations.
+- `MocaSearch.ApplyTerms`: the same gate for records found outside a search, such as a node fetched by its id.
+- OpenMoca.Reader.AgentFramework applies the creator's terms to everything it hands a model, on each turn and in
+  every tool (contract §15.4): `MocaContextOptions.Terms` and `MocaTools(search, terms)`, by default
+  `TermsRequest.Provider` (a third party's model, no conditions).
+
+### Added (rights and dates: package spec §4.12, §4.14; Reader contract §7, §15.3)
+
+- `PackageResult.DatePackaged`, as written, when the manifest passes its schema; citation records carry
+  `package.datePackaged`. Informative, and not a trusted time.
+- Terms gain `rights.export.allowed`, `rights.copyright`, `rights.notice` and `rights` (`license`, `copyright`) in
+  `terms.nodes` entries, checked with the rest of `terms`.
+- Citation records carry `node.license` and `node.copyright`: the node's `terms.nodes` entry first, else the manifest's
+  `license` and `terms.rights.copyright`; a value with a terms problem is skipped.
+- Records from a search with a terms request carry `terms.rights.export`, resolved from the package and composing
+  packages (platform default `true`; a malformed value counts as `false`). Export removes nothing from a search.
+- Embedded manifest, terms, node, citation-record, envelope and trust-root schemas match moca-spec's release branch.
+
+### Fixed
+
+- Citation records' `trust.generated` keeps `model` (the model's name and version) when the node states it (contract §7).
+- Search de-duplication keys on the node, its locale and the whole span (start and end), so two chunks of one node
+  that share a start are both kept (contract §9.2).
+
 ### Added (credits: package spec §4.13)
 
 - `PackageResult.Publisher` (`PackagePublisher`), `Url` and `Contributors` (`Contributor`), as written, when the

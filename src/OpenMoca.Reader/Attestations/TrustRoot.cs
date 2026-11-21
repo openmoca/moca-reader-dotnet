@@ -59,6 +59,9 @@ public sealed class TrustRoot
             ? ids.Select(JsonValues.StringOf).OfType<string>().ToList()
             : [];
 
+    /// <summary>Whether a key's entry has <c>ids</c>, which limit the packages it signs (attestations §6).</summary>
+    public bool HasIds(string keyId) => _keys.TryGetValue(keyId, out var entry) && entry["ids"] is JsonArray;
+
     /// <summary>
     /// Package spec §7.2: whether a signer's <c>ids</c> cover a package id: an entry equal to it, or one ending in
     /// <c>/</c>, <c>:</c> or <c>#</c> that it starts with.

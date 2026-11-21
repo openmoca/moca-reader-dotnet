@@ -37,10 +37,23 @@ public static partial class MocaReader
     /// <param name="target">A directory, archive or host source.</param>
     /// <param name="options">Host options; null for defaults.</param>
     /// <param name="cancellationToken">Cancels member resolution.</param>
-    public static Task<PackageResult> ReadPackageAsync(PackageTarget target, ReadOptions? options = null, CancellationToken cancellationToken = default)
+    public static async Task<PackageResult> ReadPackageAsync(PackageTarget target, ReadOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(target);
-        return ReadInternalAsync(target, options ?? new ReadOptions(), [], new MemberBudget(), cancellationToken);
+        options ??= new ReadOptions();
+        try
+        {
+            return await ReadInternalAsync(target, options, [], new MemberBudget(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Contract §11: a read never throws for what a package holds. Every known problem is reported where it is
+            // found; this is the backstop for anything else, which fails closed: the package is unreadable (P002) and
+            // invalid. The exception's text is not used, since it may hold a host's or a package's words.
+            var diagnostics = new DiagnosticBag(options.Strict);
+            diagnostics.Add(DiagnosticCodes.P002UnreadableEntry, $"the package could not be read ({ex.GetType().Name})");
+            return Finish(new PackageResult(), diagnostics);
+        }
     }
 
     private static async Task<PackageResult> ReadInternalAsync(
@@ -118,7 +131,7 @@ public static partial class MocaReader
             // Contract §11, M001: moca.json is UTF-8; invalid bytes are an error, not replaced.
             var text = StrictUtf8.GetString(bytes[PackageDigest.ManifestFile]).TrimStart('\ufeff');
             // I-JSON (RFC 7493): a repeated member name would let Readers disagree on `id`.
-            var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false });
+            var parsed = JsonValues.Parse(text, new JsonDocumentOptions { AllowDuplicateProperties = false });
             manifest = parsed as JsonObject;
             if (manifest is null)
             {
@@ -157,8 +170,27 @@ public static partial class MocaReader
                 result.DatePublished = datePublished;
             }
 
+            if (manifest["datePackaged"] is JsonValue packaged && packaged.TryGetValue<string>(out var datePackaged))
+            {
+                result.DatePackaged = datePackaged;
+            }
+
             // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
             result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
+
+            // Package spec §4.14: terms are checked inside; a problem is a warning, never M002.
+            var termsProblems = manifest.TryGetPropertyValue("terms", out var declaredTerms) ? TermsRules.Check(declaredTerms) : [];
+            foreach (var (problem, message) in termsProblems)
+            {
+                diagnostics.Add(problem.Code, message, PackageDigest.ManifestFile);
+            }
+
+            foreach (var message in TermsRules.Loosened(declaredTerms))
+            {
+                diagnostics.Add(DiagnosticCodes.U002TermsLoosened, message, PackageDigest.ManifestFile);
+            }
+
+            result.PendingTermsProblems = [.. termsProblems.Select(p => p.Problem)];
         }
         result.Profiles = (manifest["profiles"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? [];
         // Package spec §14: M008 only for a declared mocaVersion below 0.4; M009 for one newer than this Reader's.
@@ -221,6 +253,12 @@ public static partial class MocaReader
         }
 
         CheckRelationAuthority(result, diagnostics);
+        // Contract §15.1–15.2: the terms as written, their problems, and who stated them.
+        if (result.PendingTermsProblems is { } problems)
+        {
+            result.Terms = new PackageTerms(manifest["terms"]?.DeepClone(), problems, TermsRules.AuthorityOf(result.Signers));
+        }
+
         await ResolveMembersAsync(result, members, options, stack, budget, diagnostics, cancellationToken).ConfigureAwait(false);
         return Finish(result, diagnostics);
     }
@@ -230,11 +268,23 @@ public static partial class MocaReader
         var now = options.Clock();
         var attestationFiles = bytes.Keys
             .Where(p => p.StartsWith(PackageDigest.AttestationsDirectory + "/", StringComparison.Ordinal) && AttestationFile().IsMatch(p))
-            .Order(StringComparer.Ordinal);
+            .Order(StringComparer.Ordinal)
+            .ToList();
         var pending = new List<(string File, AttestationFormats.Parsed Parsed, string Role, AttestationRecord Record)>();
+        // Contract §3: attestation files are bounded in number and in size, so verifying them is bounded work.
+        if (attestationFiles.Count > options.Limits.MaxAttestations)
+        {
+            diagnostics.Add(DiagnosticCodes.A001AttestationMalformed,
+                $"the package has {attestationFiles.Count} attestation files, over the {options.Limits.MaxAttestations} limit; none is read",
+                PackageDigest.AttestationsDirectory);
+            return;
+        }
+
         foreach (var file in attestationFiles)
         {
-            var (parsed, malformed) = AttestationFormats.Parse(file, bytes[file]);
+            var (parsed, malformed) = bytes[file].Length > options.Limits.MaxAttestationBytes
+                ? (null, $"larger than the {options.Limits.MaxAttestationBytes}-byte limit for an attestation file")
+                : AttestationFormats.Parse(file, bytes[file]);
             if (parsed is null)
             {
                 diagnostics.Add(DiagnosticCodes.A001AttestationMalformed, malformed!, file);
@@ -319,6 +369,15 @@ public static partial class MocaReader
                     var tampered = subjects is { Count: 1 } && JsonValues.StringOf((subjects[0] as JsonObject)?["name"]) == $"{result.Id}@{result.Version}";
                     diagnostics.Add(tampered ? DiagnosticCodes.A008PackageDigestMismatch : DiagnosticCodes.A002AttestationInvalid,
                         $"package attestation does not match this package: {mismatch}", file);
+                }
+                else if (sig.Scoped && !TrustRoot.ScopeCovers(sig.Ids, result.Id))
+                {
+                    // Attestations §6 (moca-spec ADR-0040): a signer with ids signs only the packages those ids cover. The
+                    // signature is good, but this signer may not speak for this id, so the package is not signed by it.
+                    record.Outcome = "invalid";
+                    record.Reason = $"the signer's ids in the trust root do not cover {result.Id}";
+                    diagnostics.Add(DiagnosticCodes.A010SignerNotForPackage,
+                        $"package attestation is signed by {signer}, whose ids in the trust root do not cover {result.Id}", file);
                 }
                 else
                 {
@@ -430,8 +489,13 @@ public static partial class MocaReader
             case "invalid":
                 diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {sig.Reason}", file);
                 return null;
-            default:
+            case "valid":
                 return sig;
+            default:
+                // Only "valid" counts: any other outcome, from any verifier, is a signature that did not verify.
+                record.Outcome = "invalid";
+                diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: outcome {sig.Outcome}", file);
+                return null;
         }
     }
 

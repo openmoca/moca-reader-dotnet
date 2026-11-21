@@ -34,6 +34,9 @@ public static partial class MocaSchemas
     /// <summary>An envelope's moca-enc.json (encrypted packages §3).</summary>
     public const string MocaEnc = "moca-enc";
 
+    /// <summary>The creator's terms (package spec §4.14).</summary>
+    public const string Terms = "terms";
+
     private static readonly Lazy<Dictionary<string, JsonSchema>> Schemas = new(Load);
 
     private static readonly EvaluationOptions Options = new()
@@ -78,6 +81,40 @@ public static partial class MocaSchemas
         }
 
         return errors.Count > 0 ? errors : ["(root) does not match the schema"];
+    }
+
+    /// <summary>
+    /// Every failing keyword, flat, as (instance location as a JSON Pointer, evaluation path, keyword, message). A false
+    /// schema (as under <c>additionalProperties: false</c>) fails with the keyword <c>""</c> at the rejected member.
+    /// For callers that classify failures, such as the terms check (package spec §4.14).
+    /// </summary>
+    internal static List<(string Where, string Path, string Keyword, string Message)> Failures(string name, JsonNode? value)
+    {
+        var element = value is null
+            ? JsonDocument.Parse("null").RootElement
+            : JsonSerializer.SerializeToElement(value, JsonNodeContext.Default.JsonNode);
+        var results = Schemas.Value[name].Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
+        var output = new List<(string, string, string, string)>();
+        if (results.IsValid)
+        {
+            return output;
+        }
+
+        void Walk(EvaluationResults node)
+        {
+            foreach (var (keyword, message) in node.Errors ?? new Dictionary<string, string>())
+            {
+                output.Add((node.InstanceLocation.ToString(), node.EvaluationPath.ToString(), keyword, message));
+            }
+
+            foreach (var detail in node.Details ?? [])
+            {
+                Walk(detail);
+            }
+        }
+
+        Walk(results);
+        return output;
     }
 
     // Keywords whose error only says that a subschema below failed; that failure is reported where it happened.
@@ -141,7 +178,7 @@ public static partial class MocaSchemas
     private static Dictionary<string, JsonSchema> Load()
     {
         // Each schema gets its own registry, so loading twice (tests, several readers) never collides.
-        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure, MocaEnc];
+        string[] names = [Manifest, Node, CitationRecord, SidecarIndex, ReviewPredicate, TrustRoot, SearchHit, Structure, MocaEnc, Terms];
         return names.ToDictionary(
             n => n,
             n => JsonSchema.FromText(Text(n), new BuildOptions { SchemaRegistry = new SchemaRegistry() }));

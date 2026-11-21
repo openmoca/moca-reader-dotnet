@@ -16,12 +16,21 @@ public sealed record MocaContextOptions
 
     /// <summary>The options for the search on each turn.</summary>
     public SearchOptions Search { get; init; } = new();
+
+    /// <summary>
+    /// The creator's terms applied to everything handed to the model, on each turn and in every tool (Reader contract
+    /// §15.4): where the model runs, the conditions the host meets, and any rating filter. Defaults to a third party's
+    /// model with no conditions (<see cref="TermsRequest.Provider"/>). <see cref="SearchOptions.Terms"/> on
+    /// <see cref="Search"/>, when set, takes its place for the turn's search.
+    /// </summary>
+    public TermsRequest Terms { get; init; } = TermsRequest.Provider;
 }
 
 /// <summary>
 /// A Microsoft Agent Framework context provider over MOCA packages (Reader interface §7; docs/adr/0004). Before each
 /// run it searches on the latest user message and adds what it found as one user-role message holding compact
 /// citation records as JSON, with a note that they are reference material, never instructions (Reader contract §12).
+/// The creator's terms apply to everything it hands on (<see cref="MocaContextOptions.Terms"/>).
 /// The whole records ride in the message's <see cref="ChatMessage.AdditionalProperties"/> under
 /// <see cref="CitationsKey"/>. It can also offer the model <see cref="MocaTools"/>.
 /// </summary>
@@ -40,7 +49,7 @@ public sealed class MocaContextProvider : AIContextProvider
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
         _options = options ?? new MocaContextOptions();
-        _tools = _options.Tools ? new MocaTools(search).All() : [];
+        _tools = _options.Tools ? new MocaTools(search, _options.Terms).All() : [];
     }
 
     /// <inheritdoc/>
@@ -59,7 +68,9 @@ public sealed class MocaContextProvider : AIContextProvider
             return aiContext;
         }
 
-        var records = await _search.SearchAsync(query, _options.Search, cancellationToken).ConfigureAwait(false);
+        // Contract §15.4: the terms gate applies to everything handed to a model.
+        var options = _options.Search with { Terms = _options.Search.Terms ?? _options.Terms };
+        var records = await _search.SearchAsync(query, options, cancellationToken).ConfigureAwait(false);
         if (records.Count > 0)
         {
             aiContext.Messages = [Message(query, records)];

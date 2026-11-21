@@ -10,6 +10,7 @@ public sealed class VendoredSchemaTests
     [
         MocaSchemas.Manifest, MocaSchemas.Node, MocaSchemas.CitationRecord, MocaSchemas.SidecarIndex,
         MocaSchemas.ReviewPredicate, MocaSchemas.TrustRoot, MocaSchemas.SearchHit, MocaSchemas.Structure, MocaSchemas.MocaEnc,
+        MocaSchemas.Terms,
     ];
 
     [Theory]

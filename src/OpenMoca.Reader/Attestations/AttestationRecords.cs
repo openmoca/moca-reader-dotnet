@@ -60,7 +60,14 @@ public sealed record SignatureCheck(
     IReadOnlyList<string>? Reviewers,
     string? PublicKey = null,
     string? SigstoreIssuer = null,
-    string? SigstoreSubject = null);
+    string? SigstoreSubject = null)
+{
+    /// <summary>
+    /// Whether the trust-root entry that verified the signature has <c>ids</c>. Such an entry signs only packages whose
+    /// id its <c>ids</c> cover (attestations §6, moca-spec ADR-0040); an entry without <c>ids</c> signs any id.
+    /// </summary>
+    public bool Scoped { get; init; }
+}
 
 /// <summary>
 /// Detached attestations (attestations spec): DSSE envelopes (<c>*.dsse.json</c>) or Sigstore bundles
@@ -99,7 +106,7 @@ public static class AttestationFormats
         JsonObject? container;
         try
         {
-            container = JsonNode.Parse(Encoding.UTF8.GetString(bytes)) as JsonObject;
+            container = JsonValues.Parse(Encoding.UTF8.GetString(bytes)) as JsonObject;
         }
         catch (JsonException)
         {
@@ -111,6 +118,12 @@ public static class AttestationFormats
             || JsonValues.StringOf(envelope["payloadType"]) is not { } payloadType)
         {
             return (null, format == "dsse" ? "not a DSSE envelope" : "Sigstore bundle has no dsseEnvelope");
+        }
+
+        // Attestations §7: an envelope with more signature entries than the limit is malformed; none is tried.
+        if (envelope["signatures"] is JsonArray { Count: > Dsse.MaxSignatures } signatureEntries)
+        {
+            return (null, $"the envelope has {signatureEntries.Count} signature entries, more than {Dsse.MaxSignatures}");
         }
 
         if (payloadType != PayloadType)
@@ -126,7 +139,7 @@ public static class AttestationFormats
         JsonObject? statement;
         try
         {
-            statement = JsonNode.Parse(Encoding.UTF8.GetString(payloadBytes), documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject;
+            statement = JsonValues.Parse(Encoding.UTF8.GetString(payloadBytes), new JsonDocumentOptions { AllowDuplicateProperties = false }) as JsonObject;
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
@@ -182,46 +195,52 @@ public static class AttestationFormats
             }
 
             var key = trustRoot.Key(result.KeyId!, role, now);
-            return new("valid", key?.Identity ?? result.KeyId, null, trustRoot.Ids(result.KeyId!), trustRoot.Reviewers(result.KeyId!), key?.PublicKey);
+            return new("valid", key?.Identity ?? result.KeyId, null, trustRoot.Ids(result.KeyId!), trustRoot.Reviewers(result.KeyId!), key?.PublicKey)
+            {
+                Scoped = trustRoot.HasIds(result.KeyId!),
+            };
         }
 
-        var (outcome, signer, reason, ids, reviewers) = VerifySigstore(parsed, trustRoot, role, sigstore);
+        var (outcome, signer, reason, ids, reviewers, scoped) = VerifySigstore(parsed, trustRoot, role, sigstore);
         var space = outcome == "valid" ? signer!.IndexOf(' ', StringComparison.Ordinal) : -1;
         return new(outcome, signer, reason, ids, reviewers, null,
-            space > 0 ? signer![..space] : null, space > 0 ? signer![(space + 1)..] : null);
+            space > 0 ? signer![..space] : null, space > 0 ? signer![(space + 1)..] : null)
+        {
+            Scoped = scoped,
+        };
     }
 
     // Attestations §7, step 6: unverifiable when the trust root lists no Sigstore identities at all, when there is no
     // trust material, or when no verifier is plugged in (an optional feature); identities that exist but are not
     // trusted for this role make it invalid, as an untrusted DSSE key does.
-    private static (string, string?, string?, IReadOnlyList<string>, IReadOnlyList<string>?) VerifySigstore(Parsed parsed, TrustRoot trustRoot, string role, ISigstoreVerifier? sigstore)
+    private static (string, string?, string?, IReadOnlyList<string>, IReadOnlyList<string>?, bool) VerifySigstore(Parsed parsed, TrustRoot trustRoot, string role, ISigstoreVerifier? sigstore)
     {
         var sigstoreDoc = trustRoot.Document["sigstore"] as JsonObject;
         if ((sigstoreDoc?["identities"] as JsonArray ?? []).Count == 0)
         {
-            return ("unverifiable", null, "the trust root lists no Sigstore identities", [], null);
+            return ("unverifiable", null, "the trust root lists no Sigstore identities", [], null, false);
         }
 
         if (sigstoreDoc!["trustedRoot"] is not JsonObject trustedRoot)
         {
-            return ("unverifiable", null, "no sigstore.trustedRoot: this Reader verifies Sigstore offline, against the host's trusted root", [], null);
+            return ("unverifiable", null, "no sigstore.trustedRoot: this Reader verifies Sigstore offline, against the host's trusted root", [], null, false);
         }
 
         if (sigstore is null)
         {
-            return ("unverifiable", null, "Sigstore verification needs the OpenMoca.Reader.Sigstore package (ReadOptions.SigstoreVerifier)", [], null);
+            return ("unverifiable", null, "Sigstore verification needs the OpenMoca.Reader.Sigstore package (ReadOptions.SigstoreVerifier)", [], null, false);
         }
 
         var identities = trustRoot.SigstoreIdentities(role);
         if (identities.Count == 0)
         {
-            return ("invalid", null, $"no Sigstore identity in the trust root is trusted for the {role} role", [], null);
+            return ("invalid", null, $"no Sigstore identity in the trust root is trusted for the {role} role", [], null, false);
         }
 
         var result = sigstore.Verify(parsed.Container, trustedRoot);
         if (result.Outcome != "valid")
         {
-            return (result.Outcome, null, result.Reason, [], null);
+            return (result.Outcome, null, result.Reason, [], null, false);
         }
 
         // Attestations §6: issuer and subject alternative name match exactly; no patterns.
@@ -231,11 +250,11 @@ public static class AttestationFormats
             {
                 var ids = (identity["ids"] as JsonArray ?? []).Select(JsonValues.StringOf).OfType<string>().ToList();
                 IReadOnlyList<string>? reviewers = identity["reviewers"] is JsonArray listed ? [.. listed.Select(JsonValues.StringOf).OfType<string>()] : null;
-                return ("valid", $"{result.Issuer} {result.SubjectAlternativeName}", null, ids, reviewers);
+                return ("valid", $"{result.Issuer} {result.SubjectAlternativeName}", null, ids, reviewers, identity["ids"] is JsonArray);
             }
         }
 
-        return ("invalid", null, $"the certificate identity ({result.Issuer} {result.SubjectAlternativeName}) is not one the trust root lists for the {role} role", [], null);
+        return ("invalid", null, $"the certificate identity ({result.Issuer} {result.SubjectAlternativeName}) is not one the trust root lists for the {role} role", [], null, false);
     }
 
     /// <summary>Why a package statement does not attest this package, or null when it does.</summary>

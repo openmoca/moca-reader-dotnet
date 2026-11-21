@@ -10,20 +10,27 @@ namespace OpenMoca.Reader.AgentFramework;
 /// <summary>
 /// The tools an agent uses to search, read and navigate MOCA packages: <c>moca_search</c>, <c>moca_get_node</c> and
 /// <c>moca_structure</c>, named and shaped as moca-mcp's. Every call goes through the host's <see cref="MocaSearch"/>,
-/// so the gate and the host's audience filter apply, and a model cannot widen either. Results are data
-/// (Reader contract §12).
+/// so the gate, the creator's terms and the host's audience filter apply, and a model cannot widen any of them. Results
+/// are data (Reader contract §12).
 /// </summary>
 public sealed class MocaTools
 {
     private const int MaxLimit = 20;
 
     private readonly MocaSearch _search;
+    private readonly TermsRequest _terms;
 
     /// <summary>Tools over a search. <c>moca_get_node</c> and <c>moca_structure</c> need the search's library.</summary>
-    public MocaTools(MocaSearch search)
+    /// <param name="search">The host's search: its backend, audiences, hooks and terms limits.</param>
+    /// <param name="terms">
+    /// The creator's terms applied to everything the tools return (Reader contract §15.4); null for a third party's
+    /// model with no conditions (<see cref="TermsRequest.Provider"/>).
+    /// </param>
+    public MocaTools(MocaSearch search, TermsRequest? terms = null)
     {
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
+        _terms = terms ?? TermsRequest.Provider;
     }
 
     /// <summary>
@@ -59,6 +66,7 @@ public sealed class MocaTools
             IncludeAll = include_all,
             Concepts = concepts,
             Scope = scope,
+            Terms = _terms,
         };
         var records = await _search.SearchAsync(query, options, cancellationToken).ConfigureAwait(false);
         return ModelRecords.Results(query, records);
@@ -70,7 +78,8 @@ public sealed class MocaTools
         [Description("Preferred BCP 47 locale.")] string? locale = null)
     {
         var record = _search.Library!.Get(node_id, locale);
-        if (record is null || !Allowed(record))
+        record = record is not null && Allowed(record) ? _search.ApplyTerms([record], _terms).FirstOrDefault() : null;
+        if (record is null)
         {
             return new JsonObject { ["error"] = $"no node {node_id}" };
         }
@@ -105,7 +114,7 @@ public sealed class MocaTools
                     return new JsonObject { ["error"] = $"unknown include {include}: use none, narrower, parts or both" };
                 }
 
-                result = new JsonArray([.. s.Nodes(iri, include).Where(Allowed).Select(r => (JsonNode)ModelRecords.Compact(r))]);
+                result = new JsonArray([.. _search.ApplyTerms(s.Nodes(iri, include).Where(Allowed), _terms).Select(r => (JsonNode)ModelRecords.Compact(r))]);
                 break;
             default:
                 return new JsonObject { ["error"] = $"unknown operation {op}" };

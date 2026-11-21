@@ -120,6 +120,8 @@ public static class ConformanceCases
             ["apps"] = result.Apps is { } apps ? StructureJson.Strings(apps) : null,
             ["readingOrder"] = result.ReadingOrder,
             ["datePublished"] = result.DatePublished,
+            ["datePackaged"] = result.DatePackaged,
+            ["terms"] = result.Terms is { } terms ? JsonSerializer.SerializeToNode(terms, CitationJson.Options) : null,
             ["publisher"] = result.Publisher is { } publisher ? JsonSerializer.SerializeToNode(publisher, CitationJson.Options) : null,
             ["url"] = result.Url,
             ["contributors"] = result.Contributors is { } contributors ? JsonSerializer.SerializeToNode(contributors, CitationJson.Options) : null,
@@ -205,7 +207,9 @@ public static class ConformanceCases
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
             UpTo = Str(search["upTo"]),
+            Terms = search.TryGetPropertyValue("terms", out var terms) && terms is not null ? TermsRequest.FromJson(terms) : null,
         };
+        var termsLimits = o["termsLimits"] is JsonObject limits ? TermsLimits.FromJson(limits) : null;
         var audiences = o["audiences"] is JsonArray aud ? aud.Select(Str).OfType<string>().ToList() : null;
         var query = Str(search["query"]) ?? "";
         var backendName = Str(o["backend"]);
@@ -268,6 +272,7 @@ public static class ConformanceCases
             {
                 AllowUnlabelled = allowUnlabelled,
                 StructureSource = structure,
+                TermsLimits = termsLimits,
             };
             records = await mocaSearch.SearchAsync(query, options, cancellationToken);
             codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
@@ -292,7 +297,7 @@ public static class ConformanceCases
                 "ontology-guided" => OntologyGuided.Hooks(),
                 _ => null,
             };
-            var mocaSearch = new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled };
+            var mocaSearch = new MocaSearch(library, backend, audiences, hooks) { AllowUnlabelled = allowUnlabelled, TermsLimits = termsLimits };
             records = await mocaSearch.SearchAsync(query, options, cancellationToken);
             // Contract §9: the search's own findings, such as S008.
             codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
@@ -509,6 +514,8 @@ public static class ConformanceCases
             MaxMembers = Int("maxMembers") ?? d.MaxMembers,
             MaxMemberBytes = JsonValues.IntegerOf(limits["maxMemberBytes"]) ?? d.MaxMemberBytes,
             MaxMemberDepth = Int("maxMemberDepth") ?? d.MaxMemberDepth,
+            MaxAttestations = Int("maxAttestations") ?? d.MaxAttestations,
+            MaxAttestationBytes = Int("maxAttestationBytes") ?? d.MaxAttestationBytes,
         };
     }
 

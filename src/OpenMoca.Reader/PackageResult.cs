@@ -113,6 +113,18 @@ public sealed class PackageResult
     /// <summary>Package spec §4.12: when the package was first published, as written; null when the manifest fails its schema or has none. Informative.</summary>
     public string? DatePublished { get; internal set; }
 
+    /// <summary>
+    /// Package spec §4.12: when this version of the package was made, as written (RFC 3339 with an offset); null when the
+    /// manifest fails its schema or has none. Informative, and not a trusted time.
+    /// </summary>
+    public string? DatePackaged { get; internal set; }
+
+    /// <summary>
+    /// Reader contract §15.1: the creator's terms as written, their problems, and who stated them. Null when the manifest
+    /// is missing or fails its schema; present, with no <see cref="PackageTerms.Declared"/>, when it has no terms.
+    /// </summary>
+    public PackageTerms? Terms { get; internal set; }
+
     /// <summary>Package spec §4.13: who publishes the package, as written; null when absent or the package is invalid. The signer's claim, not proof.</summary>
     public PackagePublisher? Publisher { get; internal set; }
 
@@ -124,6 +136,9 @@ public sealed class PackageResult
 
     /// <summary>The resolved reading order, for search (Reader contract §9).</summary>
     internal OpenMoca.Reader.Structure.ReadingOrder? ResolvedReadingOrder { get; set; }
+
+    /// <summary>Terms problems found while checking the manifest, until the authority is known (contract §15.1).</summary>
+    internal IReadOnlyList<TermsProblem>? PendingTermsProblems { get; set; }
 
     /// <summary>Images, translations and tags, held until the package is known to be valid.</summary>
     internal Catalogue? PendingCatalogue { get; set; }

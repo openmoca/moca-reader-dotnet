@@ -11,3 +11,13 @@ public sealed class ProcessEnvironment
 {
     public const string Name = "Process environment";
 }
+
+/// <summary>
+/// Tests that measure the whole process's allocations. xUnit runs this collection on its own, so what they measure is
+/// their own work.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class Measured
+{
+    public const string Name = "Measured";
+}

@@ -24,8 +24,157 @@ internal static partial class ContentReader
     [GeneratedRegex(@"^[A-Za-z]:[\\/]")]
     private static partial Regex Drive();
 
-    [GeneratedRegex("""!?\[[^\]]*\]\([\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*(<[^>]+>|[^)\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+)(?:[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+(?:"[^"]*"|'[^']*'))?[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*\)""")]
-    private static partial Regex Link();
+    // ECMAScript white space, as \s in the reference Reader.
+    private static bool IsSpace(char c) => Array.IndexOf(UnicodeText.JsWhitespace, c) >= 0 || c is '\u2028' or '\u2029';
+
+    /// <summary>
+    /// The target of every Markdown link and image in a line, as written (a <c>&lt;...&gt;</c> target keeps its
+    /// brackets): what the first group of
+    /// <c>!?\[[^\]]*\]\(\s*(&lt;[^&gt;]+&gt;|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)</c> captures, in one pass over the
+    /// line. Contract \u00a73 bounds a Reader's work by the size of what it reads, and that expression rescans the line from
+    /// every <c>[</c>.
+    /// </summary>
+    internal static List<string> LinkTargets(string line)
+    {
+        var targets = new List<string>();
+        var open = new EvidenceText.ForwardFinder(line, '[');
+        var close = new EvidenceText.ForwardFinder(line, ']');
+        var gt = new EvidenceText.ForwardFinder(line, '>');
+        char At(int p) => p < line.Length ? line[p] : '\0';
+
+        // The end of a plain target: the next ")" or white space, or the end of the line.
+        var stopAt = -2;
+        int TargetEnd(int from)
+        {
+            if (stopAt != -1 && stopAt < from)
+            {
+                stopAt = -1;
+                for (var k = from; k < line.Length; k++)
+                {
+                    TextWork.Add(1);
+                    if (line[k] == ')' || IsSpace(line[k]))
+                    {
+                        stopAt = k;
+                        break;
+                    }
+                }
+            }
+
+            return stopAt == -1 ? line.Length : stopAt;
+        }
+
+        var spaces = new Dictionary<int, int>();
+        int SkipSpace(int p)
+        {
+            if (!spaces.TryGetValue(p, out var e))
+            {
+                e = p;
+                while (e < line.Length && IsSpace(line[e]))
+                {
+                    TextWork.Add(1);
+                    e++;
+                }
+
+                spaces[p] = e;
+            }
+
+            return e;
+        }
+
+        // What follows a target: an optional title in quotes, then ")". The index after the ")", or -1.
+        Func<int, int> Tail()
+        {
+            var quotes = new Dictionary<char, EvidenceText.ForwardFinder> { ['"'] = new(line, '"'), ['\''] = new(line, '\'') };
+            var known = new Dictionary<int, int>();
+            return p =>
+            {
+                if (known.TryGetValue(p, out var cached))
+                {
+                    return cached;
+                }
+
+                var w = SkipSpace(p);
+                var end = -1;
+                if (w > p && At(w) is '"' or '\'')
+                {
+                    var q = quotes[At(w)].From(w + 1);
+                    if (q >= 0 && At(SkipSpace(q + 1)) == ')')
+                    {
+                        end = SkipSpace(q + 1) + 1;
+                    }
+                }
+
+                if (end < 0 && At(w) == ')')
+                {
+                    end = w + 1;
+                }
+
+                known[p] = end;
+                return end;
+            };
+        }
+
+        // Each kind of target asks from rising positions of its own, so each has its own searches.
+        var afterAngle = Tail();
+        var afterPlain = Tail();
+        var pos = 0;
+        while (true)
+        {
+            TextWork.Add(1);
+            var i = open.From(pos);
+            if (i < 0)
+            {
+                break;
+            }
+
+            var j = close.From(i + 1);
+            if (j < 0)
+            {
+                break;
+            }
+
+            // The target's bounds; the text is copied only for a link that closes, so a run of unclosed links copies
+            // nothing.
+            var end = -1;
+            var (from, to) = (0, 0);
+            if (At(j + 1) == '(')
+            {
+                var p = SkipSpace(j + 2);
+                if (At(p) == '<')
+                {
+                    var q = gt.From(p + 1);
+                    if (q > p + 1)
+                    {
+                        end = afterAngle(q + 1);
+                        (from, to) = (p, q + 1);
+                    }
+                }
+
+                if (end < 0)
+                {
+                    var e = TargetEnd(p);
+                    if (e > p)
+                    {
+                        end = afterPlain(e);
+                        (from, to) = (p, e);
+                    }
+                }
+            }
+
+            // Every "[" up to j closes at j, so none of them starts a link either.
+            if (end < 0)
+            {
+                pos = j + 1;
+                continue;
+            }
+
+            TextWork.Add(to - from);
+            targets.Add(line[from..to]);
+            pos = end;
+        }
+
+        return targets;
+    }
 
     [GeneratedRegex(@"^(\.{1,2}/|/)")]
     private static partial Regex PathReference();
@@ -770,9 +919,11 @@ internal static partial class ContentReader
                 continue;
             }
 
-            foreach (Match m in Link().Matches(InlineCode().Replace(line, "")))
+            foreach (var written in LinkTargets(InlineCode().Replace(line, "")))
             {
-                var target = m.Groups[1].Value;
+                // As the reference Reader: a leading "<" and a trailing ">" are each dropped.
+                var target = written.StartsWith('<') ? written[1..] : written;
+                target = target.EndsWith('>') ? target[..^1] : target;
                 if ((Scheme().IsMatch(target) && !Drive().IsMatch(target)) || target.StartsWith('#'))
                 {
                     continue;

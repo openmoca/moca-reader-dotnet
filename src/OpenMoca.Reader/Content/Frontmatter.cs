@@ -129,7 +129,7 @@ internal static partial class CoreSchemaYaml
         }
 
         parser.Consume<DocumentStart>();
-        var value = ReadNode(parser);
+        var value = ReadNode(parser, 1);
         parser.Consume<DocumentEnd>();
         if (!parser.Accept<StreamEnd>(out _))
         {
@@ -140,7 +140,14 @@ internal static partial class CoreSchemaYaml
         return value;
     }
 
-    private static JsonNode? ReadNode(IParser parser)
+    /// <summary>
+    /// How deeply sequences and mappings may nest in frontmatter. Deeper frontmatter is invalid (C002), so reading it
+    /// never depends on the call stack (contract §3), and every value read stays within the JSON depth the schemas are
+    /// checked at.
+    /// </summary>
+    internal const int MaxDepth = OpenMoca.Reader.Json.JsonValues.MaxDepth;
+
+    private static JsonNode? ReadNode(IParser parser, int depth)
     {
         if (parser.TryConsume<AnchorAlias>(out var alias))
         {
@@ -154,12 +161,18 @@ internal static partial class CoreSchemaYaml
             return ResolveScalar(scalar);
         }
 
+        if (parser.Current is SequenceStart or MappingStart && depth > MaxDepth)
+        {
+            var deep = parser.Current!;
+            throw new YamlException(deep.Start, deep.End, $"frontmatter nests more than {MaxDepth} levels deep");
+        }
+
         if (parser.TryConsume<SequenceStart>(out _))
         {
             var array = new JsonArray();
             while (!parser.TryConsume<SequenceEnd>(out _))
             {
-                array.Add(ReadNode(parser));
+                array.Add(ReadNode(parser, depth + 1));
             }
 
             return array;
@@ -171,7 +184,7 @@ internal static partial class CoreSchemaYaml
             while (!parser.TryConsume<MappingEnd>(out _))
             {
                 var keyEvent = parser.Current!;
-                var key = ReadNode(parser);
+                var key = ReadNode(parser, depth + 1);
                 var keyText = key switch
                 {
                     null => "null",
@@ -190,7 +203,7 @@ internal static partial class CoreSchemaYaml
                     throw new YamlException(keyEvent.Start, keyEvent.End, $"duplicated mapping key \"{keyText}\"");
                 }
 
-                mapping[keyText] = ReadNode(parser);
+                mapping[keyText] = ReadNode(parser, depth + 1);
             }
 
             return mapping;
