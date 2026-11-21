@@ -123,7 +123,7 @@ public sealed class MocaSearch
         options ??= new SearchOptions();
         var now = _clock();
         var index = _library?.Relations() ?? RelationIndex.Empty;
-        var loaded = (_library?.Packages ?? []).ToDictionary(p => p.Result.Digest!, p => p.Result, StringComparer.Ordinal);
+        var loaded = Loaded();
         // The caller's concepts and scope bind the gate. Ingress may narrow what the backend searches,
         // but can never widen what the caller asked for.
         var caller = options with { Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null };
@@ -140,9 +140,7 @@ public sealed class MocaSearch
 
         Diagnostics = findings.Items;
         // Package spec §5.6: what each loaded composing package binds its members to.
-        var composition = new CompositionIndex(_library is not null
-            ? loaded.Values.Select(r => (r.Digest!, Composition.Of(r)))
-            : _states!.Values.Select(s => (s.Digest, s.Composition)));
+        var composition = CompositionOf(loaded);
         var request = caller;
         var hookContext = new HookContext(request, _library, Structure, _audiences, now);
         var effectiveQuery = query;
@@ -194,6 +192,51 @@ public sealed class MocaSearch
             }
         }
     }
+
+    /// <summary>
+    /// The terms gate (Reader contract §15.4) for records found outside a search, such as a node fetched by its id or the
+    /// nodes bound to a concept, when they are about to be handed to a model or shown under a rating filter. Returns the
+    /// records the creator's terms allow, each with its resolved terms, resolved as a search resolves them (the host's
+    /// <see cref="TermsLimits"/>, and composing packages). Records whose package is not loaded are left out. The
+    /// records removed are counted in <see cref="Diagnostics"/> (U004).
+    /// </summary>
+    /// <param name="records">Citation records from this search's library or packages.</param>
+    /// <param name="request">The host's terms request.</param>
+    public IReadOnlyList<CitationRecord> ApplyTerms(IEnumerable<CitationRecord> records, TermsRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(request);
+        var loaded = Loaded();
+        var composition = CompositionOf(loaded);
+        var allowed = _library is not null ? loaded.Keys.ToHashSet(StringComparer.Ordinal) : _allowed!;
+        var excluded = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var kept = new List<CitationRecord>();
+        foreach (var record in records)
+        {
+            if (allowed.Contains(record.Package.Digest) && WithTerms(record, request, loaded, composition, excluded) is { } termed)
+            {
+                kept.Add(termed);
+            }
+        }
+
+        var findings = new DiagnosticBag();
+        if (excluded.Count > 0)
+        {
+            findings.Add(DiagnosticCodes.U004TermsExcluded,
+                $"the terms request removed records ({string.Join(", ", excluded.Select(kv => $"{kv.Key}: {kv.Value}"))})");
+        }
+
+        Diagnostics = findings.Items;
+        return kept;
+    }
+
+    private Dictionary<string, PackageResult> Loaded() =>
+        (_library?.Packages ?? []).ToDictionary(p => p.Result.Digest!, p => p.Result, StringComparer.Ordinal);
+
+    private CompositionIndex CompositionOf(Dictionary<string, PackageResult> loaded) =>
+        new(_library is not null
+            ? loaded.Values.Select(r => (r.Digest!, Composition.Of(r)))
+            : _states!.Values.Select(s => (s.Digest, s.Composition)));
 
     /// <summary>
     /// Reader contract §9.2, "Ingress narrowing": concepts or a scope an ingress hook set keep only records bound to them,

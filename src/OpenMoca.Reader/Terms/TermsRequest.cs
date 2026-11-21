@@ -10,6 +10,12 @@ namespace OpenMoca.Reader.Search;
 /// </summary>
 public sealed record TermsRequest
 {
+    /// <summary>
+    /// What a Reader that hands content to a model applies when its host configures nothing (Reader contract §15.4): the
+    /// destination <c>provider</c>, with no conditions.
+    /// </summary>
+    public static TermsRequest Provider { get; } = new() { Ai = new AiRequest(TermsDestinations.Provider) };
+
     /// <summary>Where the records are going and what for; null to apply no <c>ai</c> terms.</summary>
     public AiRequest? Ai { get; init; }
 
