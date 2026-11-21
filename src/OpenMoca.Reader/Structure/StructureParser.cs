@@ -4,6 +4,7 @@ using OpenMoca.Reader.Diagnostics;
 using VDS.RDF;
 using VDS.RDF.Parsing;
 using VDS.RDF.Parsing.Handlers;
+using VDS.RDF.Parsing.Tokens;
 
 namespace OpenMoca.Reader.Structure;
 
@@ -40,67 +41,40 @@ public static partial class StructureParser
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+\z")]
     internal static partial Regex AbsoluteIri();
 
-    [GeneratedRegex(@"^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*(?:@prefix|PREFIX)[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+([A-Za-z][A-Za-z0-9_.-]*)?:", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
-    private static partial Regex PrefixDeclaration();
 
     /// <summary>The facts a Turtle document states, the prefixes it declares, and whether it had no O problem.</summary>
     public sealed record ParseResult(IReadOnlyList<StructureFact> Facts, IReadOnlySet<string> Prefixes, bool Ok);
 
-    /// <summary>How deeply blank-node property lists (<c>[ ]</c>) and collections (<c>( )</c>) may nest in a structure file.</summary>
-    internal const int MaxNesting = 256;
+    /// <summary>
+    /// How deeply blank-node property lists (<c>[ ]</c>) and collections (<c>( )</c>) may nest in a structure file, each
+    /// one a level, the outermost level 1. Fixed, not a default, as for JSON and YAML (contract §3, "Nesting").
+    /// </summary>
+    internal const int MaxNesting = 64;
 
     /// <summary>
-    /// The deepest nesting of <c>[</c> and <c>(</c> in Turtle text, outside IRIs, string literals and comments: one
-    /// linear pass, so it never depends on the call stack. Unbalanced text is left to the parser to report.
+    /// The deepest nesting of blank-node property lists and collections in Turtle text. The text is split into tokens
+    /// by the tokeniser the parser itself uses, so names, IRIs, strings and comments are read by Turtle's own rules
+    /// (escaped characters in a name included), and the count never depends on the call stack. Unbalanced text is
+    /// left to the parser to report. Throws <see cref="RdfParseException"/> where the parser would.
     /// </summary>
     internal static int NestingDepth(string text)
     {
+        var tokeniser = new TurtleTokeniser(new StringReader(text), TurtleSyntax.W3C, false, false);
         int depth = 0, deepest = 0;
-        for (var i = 0; i < text.Length; i++)
+        for (var token = tokeniser.GetNextToken(); token.TokenType != Token.EOF; token = tokeniser.GetNextToken())
         {
-            var c = text[i];
-            switch (c)
+            switch (token.TokenType)
             {
-                case '#':
-                    while (i < text.Length && text[i] is not ('\n' or '\r'))
-                    {
-                        i++;
-                    }
-
-                    break;
-                case '<':
-                    // An IRI reference ends at '>'; it holds no white space, so a '<' that is not one ends at the next space.
-                    while (i + 1 < text.Length && text[i + 1] is not ('>' or ' ' or '\t' or '\n' or '\r'))
-                    {
-                        i++;
-                    }
-
-                    break;
-                case '"' or '\'':
-                    var longQuote = i + 2 < text.Length && text[i + 1] == c && text[i + 2] == c;
-                    i += longQuote ? 3 : 1;
-                    for (; i < text.Length; i++)
-                    {
-                        if (text[i] == '\\')
-                        {
-                            i++;
-                        }
-                        else if (text[i] == c && (!longQuote || (i + 2 < text.Length && text[i + 1] == c && text[i + 2] == c)))
-                        {
-                            i += longQuote ? 2 : 0;
-                            break;
-                        }
-                        else if (!longQuote && text[i] is '\n' or '\r')
-                        {
-                            break;
-                        }
-                    }
-
-                    break;
-                case '[' or '(':
+                case Token.LEFTSQBRACKET or Token.LEFTBRACKET or Token.STARTQUOTE:
                     deepest = Math.Max(deepest, ++depth);
+                    if (deepest > MaxNesting)
+                    {
+                        // Deep enough to refuse; the rest of the text need not be read.
+                        return deepest;
+                    }
+
                     break;
-                case ']' or ')':
+                case Token.RIGHTSQBRACKET or Token.RIGHTBRACKET or Token.ENDQUOTE:
                     depth = Math.Max(0, depth - 1);
                     break;
             }
@@ -108,6 +82,104 @@ public static partial class StructureParser
 
         return deepest;
     }
+
+    /// <summary>
+    /// The prefixes a Turtle text declares: a line that starts, after white space, with <c>@prefix</c> or
+    /// <c>PREFIX</c> (any case), white space, then an optional name and a colon. One pass over the text; white space
+    /// that runs across several lines is read once, however many lines it covers.
+    /// </summary>
+    internal static List<string> DeclaredPrefixes(string text)
+    {
+        var names = new List<string>();
+        var n = text.Length;
+        var i = 0;
+
+        // True when a line start reaches position i through white space alone.
+        var lineStart = true;
+        long steps = 0;
+        while (i < n)
+        {
+            if (!lineStart)
+            {
+                var newline = text.IndexOf('\n', i);
+                steps += (newline < 0 ? n : newline + 1) - i;
+                if (newline < 0)
+                {
+                    break;
+                }
+
+                i = newline + 1;
+                lineStart = true;
+                continue;
+            }
+
+            for (; i < n && IsSpace(text[i]); i++)
+            {
+                steps++;
+            }
+
+            var keyword = KeywordAt(text, i);
+            if (keyword == 0)
+            {
+                lineStart = false;
+                continue;
+            }
+
+            var afterKeyword = i + keyword;
+            var name = afterKeyword;
+            var crossesLine = false;
+            for (; name < n && IsSpace(text[name]); name++)
+            {
+                crossesLine |= text[name] == '\n';
+                steps++;
+            }
+
+            if (name == afterKeyword)
+            {
+                i = afterKeyword;
+                lineStart = false;
+                continue;
+            }
+
+            var colon = name;
+            if (colon < n && char.IsAsciiLetter(text[colon]))
+            {
+                for (colon++; colon < n && (char.IsAsciiLetterOrDigit(text[colon]) || text[colon] is '_' or '.' or '-'); colon++)
+                {
+                    steps++;
+                }
+            }
+
+            if (colon < n && text[colon] == ':')
+            {
+                if (colon > name)
+                {
+                    names.Add(text[name..colon]);
+                }
+
+                i = colon + 1;
+                lineStart = false;
+                continue;
+            }
+
+            // No declaration here. A line that starts inside the white space after the keyword reaches the same
+            // place, so the search goes on from there.
+            i = name;
+            lineStart = crossesLine;
+        }
+
+        Content.TextWork.Add(steps);
+        return names;
+    }
+
+    // White space as the reference Reader's \s reads it (ECMAScript white space and line terminators).
+    private static bool IsSpace(char c) => c is '\t' or '\n' or '\v' or '\f' or '\r' or ' ' or '\u00a0' or '\u1680'
+        or (>= '\u2000' and <= '\u200a') or '\u2028' or '\u2029' or '\u202f' or '\u205f' or '\u3000' or '\ufeff';
+
+    private static int KeywordAt(string text, int i) =>
+        text.AsSpan(i).StartsWith("@prefix", StringComparison.OrdinalIgnoreCase) ? 7
+        : text.AsSpan(i).StartsWith("prefix", StringComparison.OrdinalIgnoreCase) ? 6
+        : 0;
 
     /// <summary>Parses Turtle into facts; problems are reported as O diagnostics.</summary>
     public static ParseResult Parse(byte[] turtle, string file, string layer, string origin, DiagnosticBag diagnostics, ReaderLimits limits)
@@ -122,25 +194,19 @@ public static partial class StructureParser
         }
 
         var source = Encoding.UTF8.GetString(turtle);
-        foreach (Match m in PrefixDeclaration().Matches(source))
-        {
-            if (m.Groups[1].Success && m.Groups[1].Value.Length > 0)
-            {
-                prefixes.Add(m.Groups[1].Value);
-            }
-        }
-
-        // Contract §3: the parser follows nested blank nodes and collections by recursion, so their depth is bounded
-        // before it runs.
-        if (NestingDepth(source) > MaxNesting)
-        {
-            diagnostics.Add(DiagnosticCodes.O001OntologyUnparseable, $"{file} nests blank nodes or collections more than {MaxNesting} levels deep", file);
-            return new ParseResult(facts, prefixes, false);
-        }
+        prefixes.UnionWith(DeclaredPrefixes(source));
 
         var handler = new OrderedTripleHandler();
         try
         {
+            // Contract §3: the parser follows nested blank nodes and collections by recursion, so their depth is
+            // bounded before it runs, counted on the parser's own tokens.
+            if (NestingDepth(source) > MaxNesting)
+            {
+                diagnostics.Add(DiagnosticCodes.O001OntologyUnparseable, $"{file} nests blank nodes or collections more than {MaxNesting} levels deep", file);
+                return new ParseResult(facts, prefixes, false);
+            }
+
             new TurtleParser(TurtleSyntax.W3C, false).Load(handler, new StringReader(source));
         }
         catch (Exception ex) when (ex is RdfException or UriFormatException or ArgumentException or InvalidOperationException)
