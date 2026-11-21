@@ -50,7 +50,8 @@ public static class ConformanceCases
 
         return Str(c["kind"]) switch
         {
-            "structure" => await StructureCaseAsync(root, c, readOptions, overlays, cancellationToken),
+            "structure" => await StructureCaseAsync(root, c, o, readOptions, overlays, cancellationToken),
+            "catalogue" => await CatalogueCaseAsync(root, c, o, readOptions, cancellationToken),
             "map-time" => await MapTimeCaseAsync(root, c, readOptions, cancellationToken),
             "search" => await SearchCaseAsync(root, c, o, readOptions, overlays, cancellationToken),
             _ => await PackageCaseAsync(root, c, o, readOptions, cancellationToken),
@@ -138,9 +139,11 @@ public static class ConformanceCases
         return output;
     }
 
-    private static async Task<JsonObject> StructureCaseAsync(string root, JsonObject c, ReadOptions readOptions, List<StructureOverlay> overlays, CancellationToken cancellationToken)
+    private static async Task<JsonObject> StructureCaseAsync(string root, JsonObject c, JsonObject o, ReadOptions readOptions, List<StructureOverlay> overlays, CancellationToken cancellationToken)
     {
-        var library = new Library(new LibraryOptions { Overlays = overlays });
+        var library = new Library(Dates.Parse(Str(o["now"])) is { } now
+            ? new LibraryOptions { Overlays = overlays, Clock = () => now }
+            : new LibraryOptions { Overlays = overlays });
         foreach (var target in (c["packages"] as JsonArray ?? []).Select(Str).OfType<string>())
         {
             var result = await MocaReader.ReadPackageAsync(Path.Combine(root, target), readOptions, cancellationToken);
@@ -150,7 +153,10 @@ public static class ConformanceCases
             }
         }
 
-        var s = library.Structure;
+        // Contract §10, "Under a terms request": the structure of the packages not closed for the request.
+        var s = o.TryGetPropertyValue("terms", out var terms) && terms is not null
+            ? library.StructureFor(TermsRequest.FromJson(terms), TermsLimitsOf(o))
+            : library.Structure;
         var args = c["args"] as JsonObject ?? [];
         var iri = Str(c["iri"])!;
         var transitive = args["transitive"] is JsonValue t && t.TryGetValue<bool>(out var tb) && tb;
@@ -170,6 +176,47 @@ public static class ConformanceCases
 
         return new JsonObject { ["codes"] = StructureJson.Strings(library.Diagnostics.Select(d => d.Code)), ["result"] = answer };
     }
+
+    // Contract §15.4, "The catalogue rule": what a model may be told about the loaded packages.
+    private static async Task<JsonObject> CatalogueCaseAsync(string root, JsonObject c, JsonObject o, ReadOptions readOptions, CancellationToken cancellationToken)
+    {
+        var now = Dates.Parse(Str(o["now"])) ?? DateTimeOffset.UtcNow;
+        var library = new Library(new LibraryOptions { Clock = () => now, AllowUnsignedRelations = o["allowUnsignedRelations"]?.GetValue<bool>() == true });
+        foreach (var target in (c["packages"] as JsonArray ?? []).Select(Str).OfType<string>())
+        {
+            var result = await MocaReader.ReadPackageAsync(Path.Combine(root, target), readOptions, cancellationToken);
+            if (result.Valid)
+            {
+                library.Add(result);
+            }
+        }
+
+        var entries = library.Catalogue(new CatalogueOptions
+        {
+            Terms = c.TryGetPropertyValue("terms", out var terms) && terms is not null ? TermsRequest.FromJson(terms) : null,
+            Audiences = o["audiences"] is JsonArray aud ? aud.Select(Str).OfType<string>().ToList() : null,
+            AllowUnlabelled = o["allowUnlabelled"]?.GetValue<bool>() == true,
+            IncludeAll = o["includeAll"]?.GetValue<bool>() == true,
+            TermsLimits = TermsLimitsOf(o),
+        });
+        return new JsonObject
+        {
+            ["codes"] = StructureJson.Strings(library.Diagnostics.Select(d => d.Code)),
+            ["result"] = JsonSerializer.SerializeToNode(entries, CitationJson.Options),
+        };
+    }
+
+    private static TermsLimits? TermsLimitsOf(JsonObject o) => o["termsLimits"] is JsonObject limits ? TermsLimits.FromJson(limits) : null;
+
+    /// <summary>Contract §15.4: the U004 counts, <c>{ excluded, hidden }</c>, or null when there is no U004.</summary>
+    private static JsonNode? TermsExcludedOf(IEnumerable<Diagnostic> diagnostics) =>
+        diagnostics.FirstOrDefault(d => d.Code == DiagnosticCodes.U004TermsExcluded) is { } u
+            ? new JsonObject
+            {
+                ["excluded"] = new JsonObject((u.Excluded ?? new Dictionary<string, int>()).Select(kv => KeyValuePair.Create<string, JsonNode?>(kv.Key, kv.Value))),
+                ["hidden"] = u.Hidden ?? 0,
+            }
+            : null;
 
     private static async Task<JsonObject> SearchCaseAsync(string root, JsonObject c, JsonObject o, ReadOptions readOptions, List<StructureOverlay> overlays, CancellationToken cancellationToken)
     {
@@ -209,29 +256,36 @@ public static class ConformanceCases
             UpTo = Str(search["upTo"]),
             Terms = search.TryGetPropertyValue("terms", out var terms) && terms is not null ? TermsRequest.FromJson(terms) : null,
         };
-        var termsLimits = o["termsLimits"] is JsonObject limits ? TermsLimits.FromJson(limits) : null;
+        var termsLimits = TermsLimitsOf(o);
         var audiences = o["audiences"] is JsonArray aud ? aud.Select(Str).OfType<string>().ToList() : null;
         var query = Str(search["query"]) ?? "";
         var backendName = Str(o["backend"]);
 
         IReadOnlyList<CitationRecord> records;
+        JsonNode? termsExcluded;
         if (backendName == "store")
         {
             // Everything listed is ingested (each package on its own with `ingestSeparately`); only the packages in
             // `allow` are "loaded", and the search gets their package states (contract §9.4).
             var store = new MemoryStoreBackend(filterPushdown: false);
+            // Contract §9.4: ingest with the host's terms request for the embedder's destination, when the case gives one.
+            var ingestOptions = o["ingestTerms"] is JsonObject ingestTerms
+                ? new IngestOptions { Terms = AiRequest.FromJson(ingestTerms), TermsLimits = termsLimits }
+                : new IngestOptions();
             if (o["ingestSeparately"]?.GetValue<bool>() == true)
             {
                 foreach (var p in library.Packages)
                 {
                     var single = new Library(new LibraryOptions { Clock = () => now });
                     single.Add(p.Result);
-                    await store.IngestAsync(single, cancellationToken);
+                    await store.IngestAsync(single, ingestOptions, cancellationToken);
+                    codes.AddRange(store.IngestDiagnostics.Select(d => d.Code));
                 }
             }
             else
             {
-                await store.IngestAsync(library, cancellationToken);
+                await store.IngestAsync(library, ingestOptions, cancellationToken);
+                codes.AddRange(store.IngestDiagnostics.Select(d => d.Code));
             }
 
             // Members a composed package brought into the library are matched by where their resolver found them.
@@ -276,6 +330,7 @@ public static class ConformanceCases
             };
             records = await mocaSearch.SearchAsync(query, options, cancellationToken);
             codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
+            termsExcluded = TermsExcludedOf(mocaSearch.Diagnostics);
         }
         else
         {
@@ -301,12 +356,14 @@ public static class ConformanceCases
             records = await mocaSearch.SearchAsync(query, options, cancellationToken);
             // Contract §9: the search's own findings, such as S008.
             codes.AddRange(mocaSearch.Diagnostics.Select(d => d.Code));
+            termsExcluded = TermsExcludedOf(mocaSearch.Diagnostics);
         }
 
         return new JsonObject
         {
             ["codes"] = StructureJson.Strings(codes),
             ["records"] = new JsonArray([.. records.Select(CitationJson.ToJson)]),
+            ["termsExcluded"] = termsExcluded,
         };
     }
 
