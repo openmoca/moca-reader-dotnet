@@ -1,0 +1,73 @@
+using System.IO.Compression;
+using System.Text;
+using OpenMoca.Reader.Diagnostics;
+using OpenMoca.Reader.Structure;
+using Xunit;
+
+namespace OpenMoca.Reader.Tests;
+
+/// <summary>
+/// Contract §3: parsing structure.ttl never depends on the call stack. Blank-node property lists and collections nest
+/// at most <see cref="StructureParser.MaxNesting"/> levels; deeper is O001, checked before the Turtle parser runs.
+/// </summary>
+public sealed class StructureNestingTests
+{
+    [Theory]
+    [InlineData("<https://e.org/a> <https://e.org/p> [ <https://e.org/q> [ <https://e.org/r> 1 ] ] .", 2)]
+    [InlineData("<https://e.org/a> <https://e.org/p> ( ( 1 ) 2 ) .", 2)]
+    [InlineData("<https://e.org/a(([[> <https://e.org/p> \"(([[\" .", 0)]
+    [InlineData("<https://e.org/a> <https://e.org/p> \"\"\"multi\n((\nline\"\"\" .", 0)]
+    [InlineData("<https://e.org/a> <https://e.org/p> 'it\\'s ((' .", 0)]
+    [InlineData("# ((((\n<https://e.org/a> <https://e.org/p> ( 1 ) .", 1)]
+    public void NestingDepth_CountsOnlyBrackets(string turtle, int depth) =>
+        Assert.Equal(depth, StructureParser.NestingDepth(turtle));
+
+    private static string Nested(int levels) =>
+        "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n"
+        + "<https://e.org/c> a skos:Concept ; <https://e.org/p> "
+        + string.Concat(Enumerable.Repeat("[ <https://e.org/q> ", levels)) + "1" + new string(']', levels) + " .\n";
+
+    private static async Task<PackageResult> Read(string turtle)
+    {
+        using var buffer = new MemoryStream();
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var (name, text) in new[]
+            {
+                ("moca.json", """{ "id": "https://example.com/tests/nesting", "version": "1.0.0", "title": "Nesting" }"""),
+                ("content/a.md", "---\ntype: Note\ntitle: A\n---\n\nA.\n"),
+                ("structure.ttl", turtle),
+            })
+            {
+                using var stream = zip.CreateEntry(name).Open();
+                stream.Write(Encoding.UTF8.GetBytes(text));
+            }
+        }
+
+        return await MocaReader.ReadPackageAsync(PackageTarget.FromArchive(buffer.ToArray()), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ReadPackage_AtTheNestingLimit_Parses()
+    {
+        var result = await Read(Nested(StructureParser.MaxNesting));
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable);
+    }
+
+    [Fact]
+    public async Task ReadPackage_PastTheNestingLimit_ReportsO001()
+    {
+        var result = await Read(Nested(StructureParser.MaxNesting + 1));
+
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable && d.Message.Contains("levels deep", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReadPackage_WithNestingAsDeepAsTheSizeLimitAllows_ReportsO001()
+    {
+        var result = await Read($"<https://e.org/a> <https://e.org/p> {new string('(', 1_000_000)}{new string(')', 1_000_000)} .");
+
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable);
+    }
+}

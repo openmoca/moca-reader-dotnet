@@ -46,6 +46,69 @@ public static partial class StructureParser
     /// <summary>The facts a Turtle document states, the prefixes it declares, and whether it had no O problem.</summary>
     public sealed record ParseResult(IReadOnlyList<StructureFact> Facts, IReadOnlySet<string> Prefixes, bool Ok);
 
+    /// <summary>How deeply blank-node property lists (<c>[ ]</c>) and collections (<c>( )</c>) may nest in a structure file.</summary>
+    internal const int MaxNesting = 256;
+
+    /// <summary>
+    /// The deepest nesting of <c>[</c> and <c>(</c> in Turtle text, outside IRIs, string literals and comments: one
+    /// linear pass, so it never depends on the call stack. Unbalanced text is left to the parser to report.
+    /// </summary>
+    internal static int NestingDepth(string text)
+    {
+        int depth = 0, deepest = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            switch (c)
+            {
+                case '#':
+                    while (i < text.Length && text[i] is not ('\n' or '\r'))
+                    {
+                        i++;
+                    }
+
+                    break;
+                case '<':
+                    // An IRI reference ends at '>'; it holds no white space, so a '<' that is not one ends at the next space.
+                    while (i + 1 < text.Length && text[i + 1] is not ('>' or ' ' or '\t' or '\n' or '\r'))
+                    {
+                        i++;
+                    }
+
+                    break;
+                case '"' or '\'':
+                    var longQuote = i + 2 < text.Length && text[i + 1] == c && text[i + 2] == c;
+                    i += longQuote ? 3 : 1;
+                    for (; i < text.Length; i++)
+                    {
+                        if (text[i] == '\\')
+                        {
+                            i++;
+                        }
+                        else if (text[i] == c && (!longQuote || (i + 2 < text.Length && text[i + 1] == c && text[i + 2] == c)))
+                        {
+                            i += longQuote ? 2 : 0;
+                            break;
+                        }
+                        else if (!longQuote && text[i] is '\n' or '\r')
+                        {
+                            break;
+                        }
+                    }
+
+                    break;
+                case '[' or '(':
+                    deepest = Math.Max(deepest, ++depth);
+                    break;
+                case ']' or ')':
+                    depth = Math.Max(0, depth - 1);
+                    break;
+            }
+        }
+
+        return deepest;
+    }
+
     /// <summary>Parses Turtle into facts; problems are reported as O diagnostics.</summary>
     public static ParseResult Parse(byte[] turtle, string file, string layer, string origin, DiagnosticBag diagnostics, ReaderLimits limits)
     {
@@ -65,6 +128,14 @@ public static partial class StructureParser
             {
                 prefixes.Add(m.Groups[1].Value);
             }
+        }
+
+        // Contract §3: the parser follows nested blank nodes and collections by recursion, so their depth is bounded
+        // before it runs.
+        if (NestingDepth(source) > MaxNesting)
+        {
+            diagnostics.Add(DiagnosticCodes.O001OntologyUnparseable, $"{file} nests blank nodes or collections more than {MaxNesting} levels deep", file);
+            return new ParseResult(facts, prefixes, false);
         }
 
         var handler = new OrderedTripleHandler();
