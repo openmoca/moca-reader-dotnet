@@ -11,4 +11,15 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
+
+  <!--
+    Locked restores: every project's packages.lock.json records each package, direct and transitive, with its
+    content hash. Commit the lock files. In CI (where CI=true) a restore that would change one fails. After a
+    change to Directory.Packages.props, run dotnet restore with its force-evaluate option and commit the new lock
+    files.
+  -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
 </Project>
