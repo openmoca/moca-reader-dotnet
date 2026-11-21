@@ -232,11 +232,11 @@ public sealed partial class EnvelopeTests
     }
 
     /// <summary>
-    /// A Zip64 envelope (the end record's fields all ones, the real ones in a Zip64 end record) whose package.age is
-    /// deflated: the stored-only rule still applies (E005), however the central directory is laid out.
+    /// A Zip64 envelope (the end record's fields all ones, the real ones in a Zip64 end record): contract §3, this
+    /// version does not read Zip64, so the archive is rejected (T003) before any entry, deflated or not, is looked at.
     /// </summary>
     [Fact]
-    public async Task Zip64Envelope_WithADeflatedPackage_IsE005()
+    public async Task Zip64Envelope_IsRejectedWithT003()
     {
         var zip = File.ReadAllBytes(Fixture("deflated-package.mocae"));
         var eocd = zip.AsSpan().LastIndexOf("PK\u0005\u0006"u8);
@@ -276,7 +276,7 @@ public sealed partial class EnvelopeTests
         }
 
         var r = await MocaReader.ReadPackageAsync(PackageTarget.FromArchive(m.ToArray()), WithKey(TestKey), TestContext.Current.CancellationToken);
-        Assert.Equal([DiagnosticCodes.E005EnvelopeInvalid], r.Diagnostics.Select(d => d.Code));
-        Assert.Contains("must be stored", r.Diagnostics[0].Message, StringComparison.Ordinal);
+        Assert.Equal([DiagnosticCodes.T003ArchiveRejected], r.Diagnostics.Select(d => d.Code));
+        Assert.Contains("Zip64", r.Diagnostics[0].Message, StringComparison.Ordinal);
     }
 }

@@ -78,7 +78,7 @@ internal static class CatalogueChecks
     /// <summary>Package spec §4.6: why an image fails its checks, or null when it passes.</summary>
     public static string? ImageProblem(string src, string type, IReadOnlyDictionary<string, byte[]> bytes, int maxImageBytes)
     {
-        if (!bytes.TryGetValue(src.Normalize(System.Text.NormalizationForm.FormC), out var data))
+        if (!bytes.TryGetValue(UnicodeText.Normalize(src, System.Text.NormalizationForm.FormC), out var data))
         {
             return $"{src} is not a file in the package";
         }

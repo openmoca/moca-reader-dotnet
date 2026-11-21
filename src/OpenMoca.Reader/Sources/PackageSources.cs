@@ -19,17 +19,13 @@ public static class PackageSources
             return new DirectorySource(path, limits);
         }
 
-        if (File.Exists(path) && (path.EndsWith(".moca", StringComparison.OrdinalIgnoreCase)
-                                  || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
-        {
-            return new ArchiveSource(File.ReadAllBytes(path), path, limits ?? ReaderLimits.Default);
-        }
-
         // Encrypted packages §2: an envelope (conventionally .mocae) is recognised by content, so any file that starts
         // with a Zip signature is read as an archive.
-        if (File.Exists(path) && StartsWithZipSignature(path))
+        if (File.Exists(path) && (path.EndsWith(".moca", StringComparison.OrdinalIgnoreCase)
+                                  || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                                  || StartsWithZipSignature(path)))
         {
-            return new ArchiveSource(File.ReadAllBytes(path), path, limits ?? ReaderLimits.Default);
+            return new ArchiveSource(ReadArchiveFile(path), path, limits ?? ReaderLimits.Default);
         }
 
         if (File.Exists(path))
@@ -39,6 +35,28 @@ public static class PackageSources
         }
 
         throw new TargetException(DiagnosticCodes.T001TargetNotFound, $"target does not exist: {path}");
+    }
+
+    // An archive is read into memory whole; one too large to hold is rejected before reading (T003), and one that
+    // cannot be read, or that changes while it is read, is T003 too.
+    private static byte[] ReadArchiveFile(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length > Array.MaxLength)
+            {
+                throw new TargetException(DiagnosticCodes.T003ArchiveRejected, $"archive is {stream.Length} bytes, too large to read");
+            }
+
+            var bytes = new byte[stream.Length];
+            stream.ReadExactly(bytes);
+            return bytes;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TargetException(DiagnosticCodes.T003ArchiveRejected, $"archive could not be read: {ex.Message}");
+        }
     }
 
     /// <summary>Opens a <c>.moca</c> archive held in memory.</summary>
@@ -101,63 +119,96 @@ public static class PackageSources
         }
     }
 
+    /// <summary>One central-directory entry of an archive, as its records state it.</summary>
+    internal sealed record ZipEntryRecord(
+        string Name, int Flags, int Method, uint Crc, long CompressedSize, long Size, uint ExternalAttributes, long LocalOffset);
+
     /// <summary>
-    /// Checks every central-directory name is UTF-8 (contract §3) and returns each entry's compression method, which
-    /// <see cref="System.IO.Compression.ZipArchiveEntry"/> does not expose (encrypted packages §2 needs it).
+    /// Contract §3, "Directory": the records every Zip reader must agree on, checked before any entry is read. There is
+    /// exactly one end-of-central-directory record, and it ends at the end of the file; it is not part of a multi-disk
+    /// or Zip64 archive; the central directory holds exactly the entries it declares; each entry's local header is where
+    /// the directory says, with the same name and compression method; and every name is UTF-8 with no NUL. Anything else
+    /// is T003. This is the Reader's only parse of the directory: entries are read from what it returns.
     /// </summary>
-    internal static Dictionary<string, int> AssertNamesAreUtf8(byte[] archive)
+    /// <exception cref="TargetException">The archive breaks one of the rules.</exception>
+    internal static (List<ZipEntryRecord> Entries, long Offset) ReadDirectory(byte[] buf)
     {
-        var methods = new Dictionary<string, int>(StringComparer.Ordinal);
-        // End of central directory: signature 0x06054b50, searched backwards over the comment.
-        var eocd = -1;
-        for (var i = archive.Length - 22; i >= Math.Max(0, archive.Length - 22 - 0xFFFF); i--)
+        static TargetException Reject(string why) => new(DiagnosticCodes.T003ArchiveRejected, $"archive {why}");
+        uint U32(long at) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan((int)at, 4));
+        int U16(long at) => System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan((int)at, 2));
+
+        const int End = 22;
+        long end = -1;
+        for (long p = buf.Length - End; p >= Math.Max(0, buf.Length - End - 0xFFFF); p--)
         {
-            if (archive[i] == 0x50 && archive[i + 1] == 0x4b && archive[i + 2] == 0x05 && archive[i + 3] == 0x06)
+            if (U32(p) == 0x06054b50 && p + End + U16(p + 20) == buf.Length)
             {
-                eocd = i;
-                break;
+                if (end != -1)
+                {
+                    throw Reject("has more than one end-of-central-directory record");
+                }
+
+                end = p;
             }
         }
 
-        if (eocd < 0)
+        if (end == -1)
         {
-            return methods; // ZipArchive reports a damaged archive; envelope checks treat a missing entry as E005.
+            throw Reject("has no end-of-central-directory record at its end");
         }
 
-        long count = BitConverter.ToUInt16(archive, eocd + 10);
-        long offset = BitConverter.ToUInt32(archive, eocd + 16);
-        // Zip64: the end record's fields are all ones, and the Zip64 end record (found through its locator, just
-        // before the end record) holds the real entry count and central-directory offset.
-        if ((count == 0xFFFF || offset == 0xFFFFFFFF) && eocd >= 20 && BitConverter.ToUInt32(archive, eocd - 20) == 0x07064b50)
+        var count = U16(end + 10);
+        long size = U32(end + 12);
+        long offset = U32(end + 16);
+        if (U16(end + 4) != 0 || U16(end + 6) != 0 || U16(end + 8) != count)
         {
-            var zip64 = BitConverter.ToInt64(archive, eocd - 20 + 8);
-            if (zip64 < 0 || zip64 + 56 > archive.Length || BitConverter.ToUInt32(archive, (int)zip64) != 0x06064b50)
-            {
-                return methods;
-            }
-
-            count = BitConverter.ToInt64(archive, (int)zip64 + 32);
-            offset = BitConverter.ToInt64(archive, (int)zip64 + 48);
+            throw Reject("is part of a multi-disk archive");
         }
 
-        for (long n = 0; n < count && offset >= 0 && offset + 46 <= archive.Length; n++)
+        if (count == 0xFFFF || size == 0xFFFFFFFF || offset == 0xFFFFFFFF || (end >= 20 && U32(end - 20) == 0x07064b50))
         {
-            var at = (int)offset;
-            if (BitConverter.ToUInt32(archive, at) != 0x02014b50)
+            throw Reject("uses Zip64, which this version does not read");
+        }
+
+        var stop = offset + size;
+        if (stop > end)
+        {
+            throw Reject("has a central directory that runs into its end record");
+        }
+
+        var entries = new List<ZipEntryRecord>(count);
+        var at = offset;
+        for (var i = 0; i < count; i++)
+        {
+            if (at + 46 > stop || U32(at) != 0x02014b50)
             {
-                return methods;
+                throw Reject("has a central directory that does not hold the entries it declares");
             }
 
-            var flags = BitConverter.ToUInt16(archive, at + 8);
-            var nameLength = BitConverter.ToUInt16(archive, at + 28);
-            var extraLength = BitConverter.ToUInt16(archive, at + 30);
-            var commentLength = BitConverter.ToUInt16(archive, at + 32);
-            if (at + 46 + nameLength > archive.Length)
+            var nameLength = U16(at + 28);
+            var next = at + 46 + nameLength + U16(at + 30) + U16(at + 32);
+            if (next > stop)
             {
-                return methods;
+                throw Reject("has a central directory that does not hold the entries it declares");
             }
 
-            var name = archive.AsSpan(at + 46, nameLength);
+            long local = U32(at + 42);
+            if (U16(at + 34) != 0 || local + 30 + nameLength > offset || U32(local) != 0x04034b50)
+            {
+                throw Reject("has an entry whose local header is not where the central directory says");
+            }
+
+            var name = buf.AsSpan((int)(at + 46), nameLength);
+            var sameName = U16(local + 26) == nameLength && buf.AsSpan((int)(local + 30), nameLength).SequenceEqual(name);
+            var method = U16(at + 10);
+            if (!sameName || U16(local + 8) != method)
+            {
+                throw Reject("has an entry whose local header does not match the central directory");
+            }
+
+            // Contract §3: entry names are UTF-8. A name with bytes outside ASCII and without the UTF-8 flag (general
+            // purpose bit 11) is rejected, not guessed; so is a NUL.
+            var flags = U16(at + 8);
             if (name.Contains((byte)0))
             {
                 throw new TargetException(DiagnosticCodes.T003ArchiveRejected, "archive entry name contains NUL");
@@ -168,11 +219,80 @@ public static class PackageSources
                 throw new TargetException(DiagnosticCodes.T003ArchiveRejected, "archive entry name is not marked as UTF-8");
             }
 
-            methods[Encoding.UTF8.GetString(name)] = BitConverter.ToUInt16(archive, at + 10);
-            offset += 46 + nameLength + extraLength + commentLength;
+            entries.Add(new ZipEntryRecord(Encoding.UTF8.GetString(name), flags, method, U32(at + 16), U32(at + 20), U32(at + 24), U32(at + 38), local));
+            at = next;
         }
 
-        return methods;
+        if (at != stop)
+        {
+            throw Reject("has a central directory that does not hold the entries it declares");
+        }
+
+        return (entries, offset);
+    }
+
+    /// <summary>
+    /// Contract §3: an entry's bytes. Only stored (0) and deflated (8) entries without the encryption flag are read; the
+    /// result is exactly the declared size and matches the declared CRC-32. Anything else throws
+    /// <see cref="InvalidDataException"/>, so the entry is unreadable (P002). A deflated entry never inflates far past
+    /// its declared size.
+    /// </summary>
+    internal static byte[] ReadEntry(byte[] buf, ZipEntryRecord entry, long directoryOffset)
+    {
+        if ((entry.Flags & 1) != 0)
+        {
+            throw new InvalidDataException("the entry is encrypted");
+        }
+
+        if (entry.Method is not (0 or 8))
+        {
+            throw new InvalidDataException($"the entry uses compression method {entry.Method}; only stored (0) and deflated (8) are read");
+        }
+
+        var nameLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan((int)entry.LocalOffset + 26, 2));
+        var extraLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan((int)entry.LocalOffset + 28, 2));
+        var start = entry.LocalOffset + 30 + nameLength + extraLength;
+        if (start + entry.CompressedSize > directoryOffset)
+        {
+            throw new InvalidDataException("the entry's data runs past the central directory");
+        }
+
+        var compressed = new ReadOnlyMemory<byte>(buf, (int)start, (int)entry.CompressedSize);
+        byte[] data;
+        if (entry.Method == 0)
+        {
+            data = compressed.ToArray();
+        }
+        else
+        {
+            using var inflater = new DeflateStream(new MemoryStream(buf, (int)start, (int)entry.CompressedSize, writable: false), CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            var chunk = new byte[81920];
+            int read;
+            while ((read = inflater.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                if (output.Length + read > entry.Size)
+                {
+                    throw new InvalidDataException("the entry inflates past its declared size");
+                }
+
+                output.Write(chunk, 0, read);
+            }
+
+            data = output.ToArray();
+        }
+
+        if (data.Length != entry.Size)
+        {
+            throw new InvalidDataException($"the entry holds {data.Length} bytes, not the {entry.Size} its header declares");
+        }
+
+        if (Crc32.Compute(data) != entry.Crc)
+        {
+            throw new InvalidDataException("the entry fails its CRC-32 check");
+        }
+
+        return data;
     }
 
     internal static int CompareOrdinal(PackageEntry a, PackageEntry b) => string.CompareOrdinal(a.Path, b.Path);
@@ -195,10 +315,18 @@ internal sealed class DirectorySource(string root, ReaderLimits? limits = null) 
     {
         var file = new FileInfo(Path.Combine([root, .. path.Split('/')]));
 
-        // Never follow a link swapped in after listing.
-        if (file.LinkTarget is not null || !file.Exists)
+        // Never follow a link swapped in after listing, and never open a pipe, device or socket: opening a named pipe
+        // waits for a writer.
+        if (file.LinkTarget is not null || !file.Exists || UnixFileType.IsSpecial(file.FullName))
         {
             throw new IOException($"{path} is no longer a regular file");
+        }
+
+        // An entry that reports no bytes is not opened: a regular empty file has none to read, and a named pipe that
+        // could not be told apart reports none too.
+        if (file.Length == 0)
+        {
+            return [];
         }
 
         var bytes = File.ReadAllBytes(file.FullName);
@@ -276,7 +404,7 @@ internal sealed class DirectorySource(string root, ReaderLimits? limits = null) 
             {
                 Visit(absolute, relative, entries);
             }
-            else if (info is FileInfo file && (file.Attributes & (FileAttributes.Device | FileAttributes.ReparsePoint)) == 0)
+            else if (info is FileInfo file && (file.Attributes & (FileAttributes.Device | FileAttributes.ReparsePoint)) == 0 && !UnixFileType.IsSpecial(absolute))
             {
                 entries.Add(new PackageEntry(relative, PackageEntryKind.File, file.Length));
             }
@@ -303,84 +431,64 @@ internal sealed class ArchiveSource : IPackageSource
     public ArchiveSource(byte[] archive, string? location, ReaderLimits limits)
     {
         Location = location;
-        Methods = PackageSources.AssertNamesAreUtf8(archive);
-        ZipArchive zip;
-        try
+        // Contract §3: every record is checked, and every limit applied, before any entry is read.
+        var (records, directoryOffset) = PackageSources.ReadDirectory(archive);
+        Methods = records.GroupBy(r => r.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last().Method, StringComparer.Ordinal);
+        if (records.Count > limits.MaxEntries)
         {
-            zip = new ZipArchive(new MemoryStream(archive, writable: false), ZipArchiveMode.Read);
-        }
-        catch (InvalidDataException ex)
-        {
-            throw new TargetException(DiagnosticCodes.T003ArchiveRejected, $"archive could not be opened: {ex.Message}");
+            throw new TargetException(DiagnosticCodes.T003ArchiveRejected,
+                $"archive has {records.Count} entries, over the {limits.MaxEntries} limit");
         }
 
-        using (zip)
+        long total = 0;
+        var files = new List<(string Path, PackageSources.ZipEntryRecord Record)>();
+        foreach (var entry in records)
         {
-            if (zip.Entries.Count > limits.MaxEntries)
+            var name = entry.Name;
+            PackageSources.AssertSafeArchivePath(name);
+            total += entry.Size;
+            if (total > limits.MaxBytes)
             {
                 throw new TargetException(DiagnosticCodes.T003ArchiveRejected,
-                    $"archive has {zip.Entries.Count} entries, over the {limits.MaxEntries} limit");
+                    $"archive expands beyond the {limits.MaxBytes}-byte limit");
             }
 
-            long total = 0;
-            foreach (var entry in zip.Entries)
+            if (name.EndsWith('/'))
             {
-                var name = entry.FullName;
-                PackageSources.AssertSafeArchivePath(name);
-                total += entry.Length;
-                if (total > limits.MaxBytes)
-                {
-                    throw new TargetException(DiagnosticCodes.T003ArchiveRejected,
-                        $"archive expands beyond the {limits.MaxBytes}-byte limit");
-                }
+                continue;
+            }
 
-                if (name.EndsWith('/'))
-                {
-                    continue;
-                }
+            var path = name.TrimEnd('/');
+            if (PackageSources.HasHiddenSegment(path))
+            {
+                HiddenEntries.Add(path);
+                continue;
+            }
 
-                var path = name.TrimEnd('/');
-                if (PackageSources.HasHiddenSegment(path))
-                {
-                    HiddenEntries.Add(path);
-                    continue;
-                }
+            var mode = (int)(entry.ExternalAttributes >>> 16) & TypeMask;
+            var kind = mode switch
+            {
+                SymbolicLink => PackageEntryKind.Symlink,
+                0 or RegularFile => PackageEntryKind.File,
+                _ => PackageEntryKind.Other,
+            };
+            _entries.Add(new PackageEntry(path, kind, entry.Size));
+            if (kind == PackageEntryKind.File)
+            {
+                files.Add((path, entry));
+            }
+        }
 
-                var mode = (entry.ExternalAttributes >>> 16) & TypeMask;
-                var kind = mode switch
-                {
-                    SymbolicLink => PackageEntryKind.Symlink,
-                    0 or RegularFile => PackageEntryKind.File,
-                    _ => PackageEntryKind.Other,
-                };
-                _entries.Add(new PackageEntry(path, kind, entry.Length));
-                if (kind == PackageEntryKind.File)
-                {
-                    // Contract §3: only stored and deflated entries are read (any other method is unreadable, P002),
-                    // and an entry may not inflate past its declared size.
-                    try
-                    {
-                        using var stream = entry.Open();
-                        using var buffer = new MemoryStream();
-                        var chunk = new byte[81920];
-                        int read;
-                        while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
-                        {
-                            if (buffer.Length + read > entry.Length)
-                            {
-                                throw new InvalidDataException("the entry inflates past its declared size");
-                            }
-
-                            buffer.Write(chunk, 0, read);
-                        }
-
-                        _files[path] = buffer.ToArray();
-                    }
-                    catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or IOException)
-                    {
-                        _unreadable[path] = ex.Message;
-                    }
-                }
+        foreach (var (path, entry) in files)
+        {
+            // Contract §3: an entry is exactly its declared size, stored or deflated; anything else is unreadable (P002).
+            try
+            {
+                _files[path] = PackageSources.ReadEntry(archive, entry, directoryOffset);
+            }
+            catch (InvalidDataException ex)
+            {
+                _unreadable[path] = ex.Message;
             }
         }
 

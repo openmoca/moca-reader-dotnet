@@ -28,6 +28,9 @@ public static partial class Dsse
         return [.. head, .. type, .. middle, .. payload];
     }
 
+    /// <summary>Most signature entries one DSSE envelope may hold (attestations §7; fixed, not a host limit).</summary>
+    public const int MaxSignatures = 16;
+
     /// <summary>
     /// Verifies an envelope. <paramref name="resolvePublicKey"/> returns a PEM (SPKI) public key for a
     /// key id, or null when the key is unknown or not trusted.
@@ -40,6 +43,12 @@ public static partial class Dsse
         if (payloadText is null || payloadType is null || envelope["signatures"] is not JsonArray { Count: > 0 } signatures)
         {
             return (false, null, "malformed DSSE envelope");
+        }
+
+        // Attestations §7, contract §3: verifying an envelope is bounded work.
+        if (signatures.Count > MaxSignatures)
+        {
+            return (false, null, $"more than {MaxSignatures} signature entries");
         }
 
         if (DecodeBase64(payloadText) is not { } payload)
