@@ -1,6 +1,8 @@
 using OpenMoca.Reader.Attestations;
 using OpenMoca.Reader.Json;
+using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
 using OpenMoca.Reader.Citations;
 using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Structure;
@@ -27,6 +29,7 @@ public sealed class MocaSearch
     private readonly SearchHooks _hooks;
     private readonly int _overfetch;
     private readonly int? _maxCandidates;
+    private readonly JsonObject? _termsLimits;
 
     /// <summary>A search over a library's loaded packages.</summary>
     public MocaSearch(Library library, ISearchBackend backend, IReadOnlyList<string>? audiences = null, SearchHooks? hooks = null, int overfetch = 3)
@@ -100,6 +103,20 @@ public sealed class MocaSearch
         init => _maxCandidates = value is null or >= 1 ? value : throw new ArgumentOutOfRangeException(nameof(MaxCandidates), value, "must be at least 1");
     }
 
+    /// <summary>
+    /// The host's terms limits (Reader contract §15.3 step 4), applied when a search has a terms request: floors, never
+    /// values. Null (the default) for none.
+    /// </summary>
+    public TermsLimits? TermsLimits
+    {
+        get;
+        init
+        {
+            field = value;
+            _termsLimits = value?.ToAi();
+        }
+    }
+
     /// <summary>Runs one search; returns citation records with scores, best first unless an egress hook ordered them.</summary>
     public async Task<IReadOnlyList<CitationRecord>> SearchAsync(string query, SearchOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -153,17 +170,27 @@ public sealed class MocaSearch
                 candidates = await _hooks.Egress(tagged, hookContext with { Request = request }, cancellationToken).ConfigureAwait(false);
             }
 
-            var passed = Gate(candidates, caller, loaded, composition);
-            if (passed.Count >= caller.Limit || hits.Count < size)
+            // Counted afresh each round: the last round's count is the one reported.
+            var excluded = caller.Terms is not null ? new SortedDictionary<string, int>(StringComparer.Ordinal) : null;
+            var passed = Gate(candidates, caller, loaded, composition, excluded);
+            var done = passed.Count >= caller.Limit || hits.Count < size;
+            var truncated = !done && _maxCandidates is { } max && size >= max;
+            if (done || truncated)
             {
-                return passed.Take(caller.Limit).ToList();
-            }
+                if (truncated)
+                {
+                    findings.Add(DiagnosticCodes.S010SearchTruncated, $"stopped at maxCandidates {_maxCandidates} with {passed.Count} of {caller.Limit} records");
+                }
 
-            if (_maxCandidates is { } max && size >= max)
-            {
-                findings.Add(DiagnosticCodes.S010SearchTruncated, $"stopped at maxCandidates {max} with {passed.Count} of {caller.Limit} records");
+                // Contract §15.4: the records the terms gate removed, counted by reason.
+                if (excluded is { Count: > 0 })
+                {
+                    findings.Add(DiagnosticCodes.U004TermsExcluded,
+                        $"the terms request removed records ({string.Join(", ", excluded.Select(kv => $"{kv.Key}: {kv.Value}"))})");
+                }
+
                 Diagnostics = findings.Items;
-                return passed;
+                return truncated ? passed : passed.Take(caller.Limit).ToList();
             }
         }
     }
@@ -403,7 +430,7 @@ public sealed class MocaSearch
     /// best first; the caller keeps the limit.
     /// </summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
-        CompositionIndex composition)
+        CompositionIndex composition, SortedDictionary<string, int>? excluded)
     {
         var concepts = ConceptsFor(caller);
         var wanted = concepts is null ? null : concepts.ToHashSet(StringComparer.Ordinal);
@@ -444,13 +471,28 @@ public sealed class MocaSearch
                 continue;
             }
 
-            // Contract §9.2: one result per node representation and span.
-            if (!seen.Add($"{record.Node.Ref}\u0000{record.Node.Locale}\u0000{record.Span?.Start.ToString() ?? ""}"))
+            // Contract §9.2: one result per node representation and span, the whole span.
+            var key = $"{record.Node.Ref}\u0000{record.Node.Locale}\u0000{record.Span?.Start.ToString(CultureInfo.InvariantCulture) ?? ""}\u0000{record.Span?.End.ToString(CultureInfo.InvariantCulture) ?? ""}";
+            if (seen.Contains(key))
             {
                 continue;
             }
 
-            records.Add(record);
+            // Contract §9.2 step 5.3 and §15.4: with a terms request, the terms gate. Without one, terms remove nothing,
+            // and a record never carries terms a backend or hook gave it.
+            var kept = record with { Terms = null };
+            if (caller.Terms is { } request)
+            {
+                if (WithTerms(record, request, loaded, composition, excluded!) is not { } termed)
+                {
+                    continue;
+                }
+
+                kept = termed;
+            }
+
+            seen.Add(key);
+            records.Add(kept);
         }
 
         if (_hooks.Egress is null)
@@ -460,6 +502,56 @@ public sealed class MocaSearch
         }
 
         return records;
+    }
+
+    /// <summary>
+    /// Contract §15.3–15.4: the record with its resolved terms, or null when the terms gate removes it (counted by
+    /// reason). A package with no terms result has every field at its strictest.
+    /// </summary>
+    private CitationRecord? WithTerms(CitationRecord record, TermsRequest request, Dictionary<string, PackageResult> loaded,
+        CompositionIndex composition, SortedDictionary<string, int> excluded)
+    {
+        (JsonNode? Terms, string Authority)? SourceOf(string digest)
+        {
+            if (_library is not null)
+            {
+                return loaded.GetValueOrDefault(digest)?.Terms is { } t ? (t.Declared, t.Authority) : null;
+            }
+
+            return _states!.GetValueOrDefault(digest)?.Terms is { } s ? (s.Terms, s.Authority) : null;
+        }
+
+        // Contract §15.3 step 3: a composing package's terms apply only when its signers speak for the member, as for
+        // upTo (§9), or the host allows unsigned packages to. A composer with no terms result counts as setting nothing.
+        var composites = new List<JsonNode?>();
+        foreach (var composer in composition.ComposersOf(record.Package.Digest))
+        {
+            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded), record.Package.Id))
+            {
+                continue;
+            }
+
+            if (SourceOf(composer.Digest) is { Terms: { } c })
+            {
+                composites.Add(c);
+            }
+        }
+
+        var (terms, authority) = SourceOf(record.Package.Digest) ?? (TermsRules.Strictest, TermsAuthority.Unverified);
+        var ai = TermsRules.ResolveAi(terms, record.Node.Path, _termsLimits, composites);
+        var rating = TermsRules.RatingOf(terms, record.Node.Path);
+        var reasons = TermsRules.GateReasons(request, ai, rating);
+        if (reasons.Count > 0)
+        {
+            foreach (var reason in reasons)
+            {
+                excluded[reason] = excluded.GetValueOrDefault(reason) + 1;
+            }
+
+            return null;
+        }
+
+        return record with { Terms = TermsRules.RecordTerms(authority, ai, rating, TermsRules.ResolveExport(terms, composites)) };
     }
 
     private static bool LocaleOk(CitationRecord record, string locale, Dictionary<string, PackageResult> loaded)

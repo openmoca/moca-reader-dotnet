@@ -56,6 +56,14 @@ public sealed partial record PackageState
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OpenMoca.Reader.Structure.CompositionState? Composition { get; init; }
 
+    /// <summary>
+    /// What resolving the package's terms needs (Reader contract §15.3): its declared terms and their authority, so a store
+    /// search applies a terms request too. Null when the package has no terms result.
+    /// </summary>
+    [JsonPropertyName("terms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PackageTermsState? Terms { get; init; }
+
     /// <summary>The state of a valid package result.</summary>
     public static PackageState From(PackageResult result)
     {
@@ -83,6 +91,7 @@ public sealed partial record PackageState
             ReadingOrder = result.ResolvedReadingOrder,
             IssuedCopy = result.IssuedCopy,
             Composition = OpenMoca.Reader.Structure.Composition.Of(result),
+            Terms = result.Terms is { } terms ? new PackageTermsState(terms.Declared?.DeepClone() ?? new JsonObject(), terms.Authority) : null,
         };
     }
 
@@ -193,3 +202,10 @@ public sealed partial record PackageState
         };
     }
 }
+
+/// <summary>A package state's terms (Reader contract §9.4, §15.3): the declared terms, <c>{}</c> for none, and their authority.</summary>
+/// <param name="Terms">The manifest's terms as written; an empty object when it has none.</param>
+/// <param name="Authority"><c>packager</c> or <c>unverified</c>.</param>
+public sealed record PackageTermsState(
+    [property: JsonPropertyName("terms")] JsonNode Terms,
+    [property: JsonPropertyName("authority")] string Authority);

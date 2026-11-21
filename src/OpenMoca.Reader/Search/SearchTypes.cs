@@ -119,6 +119,13 @@ public sealed record SearchOptions
     /// caller only; an ingress hook never changes it.
     /// </summary>
     public string? UpTo { get; init; }
+
+    /// <summary>
+    /// The host's terms request (Reader contract §15.4): with one, the terms gate also removes records the creator's
+    /// terms do not allow, and each record carries its resolved terms. Without one, terms remove nothing. Follows the
+    /// caller only; a hook never changes it.
+    /// </summary>
+    public TermsRequest? Terms { get; init; }
 }
 
 /// <summary>What an ingress hook may change: the query, and the concepts or scope the backend searches.</summary>
