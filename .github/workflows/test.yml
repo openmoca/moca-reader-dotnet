@@ -27,18 +27,18 @@ jobs:
     name: Public dependencies only
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: moca-reader-dotnet
       # The check lives in moca-spec, the one copy every open repository runs.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-spec
           ref: ${{ env.MOCA_SPEC_REF }}
           path: moca-spec
           # Read access to the other MOCA repos while they are private.
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: node moca-spec/scripts/check-deps.mjs moca-reader-dotnet
@@ -51,17 +51,17 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: moca-reader-dotnet
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-spec
           ref: ${{ env.MOCA_SPEC_REF }}
           path: moca-spec
           # Read access to the other MOCA repos while they are private.
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: moca-reader-dotnet/global.json
       - run: dotnet build moca-reader-dotnet.slnx -c Release
@@ -86,31 +86,31 @@ jobs:
     name: Corpus and parity with the reference Reader
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: moca-reader-dotnet
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-spec
           ref: ${{ env.MOCA_SPEC_REF }}
           path: moca-spec
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-reader-typescript
           ref: ${{ env.MOCA_READER_TYPESCRIPT_REF }}
           path: moca-reader-typescript
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-tools
           ref: ${{ env.MOCA_TOOLS_REF }}
           path: moca-tools
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: moca-reader-dotnet/global.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: npm ci
@@ -132,32 +132,32 @@ jobs:
     name: Getting-started guide
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: moca-reader-dotnet
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-spec
           ref: ${{ env.MOCA_SPEC_REF }}
           path: moca-spec
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
       # moca-spec's corpus runner links the reference Reader and moca-tools until they are on npm.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-reader-typescript
           ref: ${{ env.MOCA_READER_TYPESCRIPT_REF }}
           path: moca-reader-typescript
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/moca-tools
           ref: ${{ env.MOCA_TOOLS_REF }}
           path: moca-tools
           token: ${{ secrets.MOCA_REPOS_TOKEN || github.token }}
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: moca-reader-dotnet/global.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: npm ci
