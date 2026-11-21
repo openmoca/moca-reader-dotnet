@@ -114,4 +114,21 @@ public sealed class StructureNestingTests
 
         Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable && d.Message.Contains("levels deep", StringComparison.Ordinal));
     }
+
+    [Theory]
+    [InlineData(64, false)]
+    [InlineData(65, true)]
+    [InlineData(100_000, true)]
+    public void Overlay_NestedPastTheLimit_ReportsO001WithTheOverlayAsTheFile(int levels, bool refused)
+    {
+        // Contract §3: a host's structure overlay goes through the same parser and has the same fixed limit.
+        var library = new Library(new LibraryOptions
+        {
+            Overlays = [new StructureOverlay("deep", StructureLayers.Application, NestedAfterEscapedName(levels))],
+        });
+
+        var problem = library.Diagnostics.FirstOrDefault(d => d.Code == DiagnosticCodes.O001OntologyUnparseable);
+        Assert.Equal(refused, problem is not null);
+        Assert.Equal(refused ? "overlay:deep" : null, problem?.File);
+    }
 }
