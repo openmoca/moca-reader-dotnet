@@ -45,8 +45,11 @@ public static partial class StructureParser
     /// <summary>The facts a Turtle document states, the prefixes it declares, and whether it had no O problem.</summary>
     public sealed record ParseResult(IReadOnlyList<StructureFact> Facts, IReadOnlySet<string> Prefixes, bool Ok);
 
-    /// <summary>How deeply blank-node property lists (<c>[ ]</c>) and collections (<c>( )</c>) may nest in a structure file.</summary>
-    internal const int MaxNesting = 256;
+    /// <summary>
+    /// How deeply blank-node property lists (<c>[ ]</c>) and collections (<c>( )</c>) may nest in a structure file, each
+    /// one a level, the outermost level 1. Fixed, not a default, as for JSON and YAML (contract §3, "Nesting").
+    /// </summary>
+    internal const int MaxNesting = 64;
 
     /// <summary>
     /// The deepest nesting of blank-node property lists and collections in Turtle text. The text is split into tokens

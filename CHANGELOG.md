@@ -30,10 +30,10 @@ For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there an
   being level 1, fixed rather than left to a parser's default. Deeper text is refused as it is read, without
   recursion, with the code its kind of file has for text that does not parse: `M001` for `moca.json`, `C002` for a
   node's front matter (`C004` for a reserved file), `A001` for an attestation file or its statement, `E005` for
-  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` whose blank
-  nodes and collections nest deeper than 256 levels is `O001`, checked in one pass before the Turtle parser runs. The
-  check counts the parser's own tokens, so it follows Turtle's rules for names (escaped characters included), IRIs,
-  strings and comments.
+  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` is nested at
+  most 64 levels too, each blank-node property list or collection being one level; deeper is `O001`, checked in one
+  pass before the Turtle parser runs. The check counts the parser's own tokens, so it follows Turtle's rules for names
+  (escaped characters included), IRIs, strings and comments.
 - **A read never throws for what a package holds**: a JSON string with an unpaired surrogate escape is invalid JSON
   (I-JSON, RFC 7493): `M001`, `A001`, `E005` or `S001` by file; an unreadable envelope entry is `P002` and an unreadable
   sidecar entry `S001`; image paths are normalised safely. Anything else unexpected becomes one `P002` and an invalid

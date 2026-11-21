@@ -8,8 +8,8 @@ namespace OpenMoca.Reader.Tests;
 
 /// <summary>
 /// Contract §3: parsing structure.ttl never depends on the call stack. Blank-node property lists and collections nest
-/// at most <see cref="StructureParser.MaxNesting"/> levels; deeper is O001, checked before the Turtle parser runs, on
-/// the parser's own tokens, so Turtle's rules for names, IRIs, strings and comments decide what is a bracket.
+/// at most 64 levels, fixed, each one a level; deeper is O001, checked before the Turtle parser runs, on the parser's
+/// own tokens, so Turtle's rules for names, IRIs, strings and comments decide what is a bracket.
 /// </summary>
 public sealed class StructureNestingTests
 {
@@ -57,9 +57,12 @@ public sealed class StructureNestingTests
     }
 
     [Fact]
+    public void MaxNesting_IsTheContractsFixedLimit() => Assert.Equal(64, StructureParser.MaxNesting);
+
+    [Fact]
     public async Task ReadPackage_AtTheNestingLimit_Parses()
     {
-        var result = await Read(Nested(StructureParser.MaxNesting));
+        var result = await Read(Nested(64));
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable);
     }
@@ -67,7 +70,7 @@ public sealed class StructureNestingTests
     [Fact]
     public async Task ReadPackage_PastTheNestingLimit_ReportsO001()
     {
-        var result = await Read(Nested(StructureParser.MaxNesting + 1));
+        var result = await Read(Nested(65));
 
         Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable && d.Message.Contains("levels deep", StringComparison.Ordinal));
     }
@@ -83,7 +86,7 @@ public sealed class StructureNestingTests
     [Fact]
     public async Task ReadPackage_AtTheNestingLimitAfterAnEscapedName_Parses()
     {
-        var result = await Read(NestedAfterEscapedName(StructureParser.MaxNesting));
+        var result = await Read(NestedAfterEscapedName(64));
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable);
     }
@@ -91,7 +94,7 @@ public sealed class StructureNestingTests
     [Fact]
     public async Task ReadPackage_PastTheNestingLimitAfterAnEscapedName_ReportsO001()
     {
-        var result = await Read(NestedAfterEscapedName(StructureParser.MaxNesting + 1));
+        var result = await Read(NestedAfterEscapedName(65));
 
         Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.O001OntologyUnparseable && d.Message.Contains("levels deep", StringComparison.Ordinal));
     }
