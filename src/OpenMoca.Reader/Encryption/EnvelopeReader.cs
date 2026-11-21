@@ -92,7 +92,17 @@ public static partial class MocaReader
             }
         }
 
-        var (marker, error) = ParseMarker(source.Read(files[Marker]));
+        byte[] markerBytes;
+        try
+        {
+            markerBytes = source.Read(files[Marker]);
+        }
+        catch (IOException ex)
+        {
+            return Fail(DiagnosticCodes.P002UnreadableEntry, $"\"{Marker}\" could not be read: {ex.Message}", Marker);
+        }
+
+        var (marker, error) = ParseMarker(markerBytes);
         if (marker is null)
         {
             return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"moca-enc.json is invalid: {error}", Marker);
@@ -103,14 +113,26 @@ public static partial class MocaReader
         result.Envelope = new EnvelopeInfo(format, false, outline?.DeepClone().AsObject());
 
         // Steps 3–6.
-        var structure = files.TryGetValue(StructureCopy, out var copy) ? source.Read(copy) : null;
-        var cover = covers.Count == 1 ? new EnvelopeCover(covers[0], source.Read(files[covers[0]])) : null;
+        byte[]? structure;
+        EnvelopeCover? cover;
+        byte[] packageBytes;
+        try
+        {
+            structure = files.TryGetValue(StructureCopy, out var copy) ? source.Read(copy) : null;
+            cover = covers.Count == 1 ? new EnvelopeCover(covers[0], source.Read(files[covers[0]])) : null;
+            packageBytes = source.Read(files[PackageAge]);
+        }
+        catch (IOException ex)
+        {
+            return Fail(DiagnosticCodes.P002UnreadableEntry, $"an envelope entry could not be read: {ex.Message}");
+        }
+
         if (cover is not null && cover.Bytes.Length > options.Limits.MaxImageBytes)
         {
             return Fail(DiagnosticCodes.E005EnvelopeInvalid, $"{cover.Name} is {cover.Bytes.Length} bytes, over the limit of {options.Limits.MaxImageBytes}", cover.Name);
         }
 
-        var (plain, code, message) = await OpenAgeEntryAsync(source.Read(files[PackageAge]), "package", outline, options, cancellationToken).ConfigureAwait(false);
+        var (plain, code, message) = await OpenAgeEntryAsync(packageBytes, "package", outline, options, cancellationToken).ConfigureAwait(false);
         if (plain is null)
         {
             return Fail(code!, message!, PackageAge);
@@ -141,7 +163,7 @@ public static partial class MocaReader
         try
         {
             var text = StrictUtf8.GetString(bytes).TrimStart('﻿');
-            var node = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false });
+            var node = JsonValues.Parse(text, new JsonDocumentOptions { AllowDuplicateProperties = false });
             var errors = MocaSchemas.Validate(MocaSchemas.MocaEnc, node);
             return errors.Count > 0 ? (null, string.Join("; ", errors)) : (node as JsonObject, null);
         }
@@ -199,7 +221,7 @@ public static partial class MocaReader
                 return $"the cover copy {copyOfCover.Name} does not match the cover's type {type}";
             }
 
-            if (!bytes[src.Normalize(NormalizationForm.FormC)].AsSpan().SequenceEqual(copyOfCover.Bytes))
+            if (!bytes[UnicodeText.Normalize(src, NormalizationForm.FormC)].AsSpan().SequenceEqual(copyOfCover.Bytes))
             {
                 return $"the cover copy differs from {src}";
             }

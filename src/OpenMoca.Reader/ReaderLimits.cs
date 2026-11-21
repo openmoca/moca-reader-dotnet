@@ -68,4 +68,10 @@ public sealed record ReaderLimits
 
     /// <summary>The bytes of one manifest image (M010), or of an envelope's cover copy (E005) (package spec §4.6, contract §3).</summary>
     public int MaxImageBytes { get; init; } = 1024 * 1024;
+
+    /// <summary>Most attestation files a package may hold; beyond it none is read (A001, once) (contract §3).</summary>
+    public int MaxAttestations { get; init; } = 256;
+
+    /// <summary>Largest attestation file, in bytes; a larger one is not parsed (A001) (contract §3).</summary>
+    public int MaxAttestationBytes { get; init; } = 1024 * 1024;
 }

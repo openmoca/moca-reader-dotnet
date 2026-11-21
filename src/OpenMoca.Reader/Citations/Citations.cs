@@ -108,13 +108,18 @@ public static class Citations
             }
         }
 
+        // Contract §7: the node's licence and copyright, from its terms.nodes entry or the package's. The manifest's
+        // license counts only when the manifest passes its schema.
+        var (license, copyright) = TermsRules.RightsOf(result.Terms?.Declared, result.Terms?.Problems ?? [],
+            result.Distribution is not null ? Str(manifest["license"]) : null, node.Path);
         var body = rep.Body;
         return new CitationRecord
         {
             Package = new CitationPackage(result.Id, result.Version, result.Digest ?? "", result.Signers.Count > 0,
                 result.Signers.Count > 0 ? [.. result.Signers] : null,
                 result.IssuedCopy is { } issued ? new CitationIssuedCopy(issued.OriginalDigest, [.. issued.Issuers]) : null,
-                result.DatePublished),
+                result.DatePublished,
+                result.DatePackaged),
             Node = new CitationNode
             {
                 Id = $"{result.Id}#{node.Path}",
@@ -131,6 +136,8 @@ public static class Citations
                 DatePublished = rep.Moca["date_published"] is JsonValue published && published.TryGetValue<string>(out var date) && Dates.Parse(date) is not null ? date : null,
                 // Package spec §4.13: the node's own credits, never the package's.
                 Contributors = rep.Contributors,
+                License = license,
+                Copyright = copyright,
                 // Package spec §5.7: the valid media descriptions, in order.
                 Media = rep.Media.Count > 0 ? [.. rep.Media.Select(d => new CitationMedia(d.Source, d.Resource, d.Type, d.Duration, d.Digest, d.Transcript) { AlternateOf = d.AlternateOf, Sync = d.Sync })] : null,
             },
@@ -142,6 +149,10 @@ public static class Citations
                 // An entry with no actor (`by`) is dropped rather than reported as "undefined".
                 Generated = fm["generated"] is JsonObject generated && HasActor(generated)
                     ? new DeclaredBy(generated["by"]!.ToString(), generated["at"]?.ToString())
+                    {
+                        // Contract §7: the model's name and version, kept when it is a string.
+                        Model = Str(generated["model"]) is { Length: > 0 } model ? model : null,
+                    }
                     : null,
                 DeclaredVerified = VerifiedEntries(fm["verified"]),
                 AttestedReviews = result.ReviewsByFile.TryGetValue(rep.File, out var reviews) ? reviews.Select(r => CitationReview.From(r, result.Signers.Count > 0)).ToList() : [],

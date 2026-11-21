@@ -145,6 +145,45 @@ public sealed class MocaContextProviderTests
         Assert.NotNull(unknown["error"]);
     }
 
+    /// <summary>
+    /// Reader contract §15.4: a Reader that hands content to a model applies the creator's terms to everything it hands
+    /// on, as a third party's model with no conditions unless the host says otherwise.
+    /// </summary>
+    [Fact]
+    public async Task CreatorsTerms_ApplyToEachTurnAndEveryTool_AsAProviderByDefault()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dir = Directory.CreateTempSubdirectory("moca-terms-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "content"));
+            File.WriteAllText(Path.Combine(dir, "moca.json"),
+                "{\"id\":\"https://example.com/no-provider\",\"version\":\"1.0.0\",\"title\":\"N\",\"terms\":{\"ai\":{\"allowed\":{\"provider\":false}}}}");
+            File.WriteAllText(Path.Combine(dir, "content", "a.md"), "---\ntype: Note\ntitle: Refunds\n---\n\nThe refund window is 30 days.\n");
+            var library = new Library().Add(await MocaReader.ReadPackageAsync(dir, cancellationToken: ct));
+            var search = new MocaSearch(library, new LexicalBackend(library));
+            var byDefault = new RecordingChatClient();
+            var onDevice = new RecordingChatClient();
+            var defaultTools = new MocaTools(search).All().ToDictionary(t => t.Name, t => (AIFunction)t);
+            var deviceTools = new MocaTools(search, new TermsRequest { Ai = new AiRequest(TermsDestinations.Device) }).All().ToDictionary(t => t.Name, t => (AIFunction)t);
+            var node = new AIFunctionArguments { ["node_id"] = "https://example.com/no-provider#a.md" };
+
+            await Agent(byDefault, new MocaContextProvider(search)).RunAsync("refund window", cancellationToken: ct);
+            await Agent(onDevice, new MocaContextProvider(search, new MocaContextOptions { Terms = new TermsRequest { Ai = new AiRequest(TermsDestinations.Device) } }))
+                .RunAsync("refund window", cancellationToken: ct);
+
+            Assert.DoesNotContain(byDefault.Messages, m => m.AdditionalProperties?.ContainsKey(MocaContextProvider.CitationsKey) == true);
+            Assert.Contains(onDevice.Messages, m => m.AdditionalProperties?.ContainsKey(MocaContextProvider.CitationsKey) == true);
+            Assert.Empty((await Invoke(defaultTools["moca_search"], new() { ["query"] = "refund" }, ct))["results"]!.AsArray());
+            Assert.NotNull((await Invoke(defaultTools["moca_get_node"], node, ct))["error"]);
+            Assert.Equal("a.md", (await Invoke(deviceTools["moca_get_node"], node, ct))["node"]!["path"]!.GetValue<string>());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static async Task<(MocaSearch Search, Library Library)> SupportKb(CancellationToken ct)
     {
         var library = new Library().Add(await MocaReader.ReadPackageAsync(Path.Combine(MocaSpec.Examples, "support-kb"), cancellationToken: ct));

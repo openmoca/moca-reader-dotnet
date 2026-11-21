@@ -59,6 +59,13 @@ public sealed record CitationRecord
     /// <summary>How a search found this record (moca-spec ADR-0010).</summary>
     [JsonPropertyName("retrieval")]
     public CitationRetrieval? Retrieval { get; init; }
+
+    /// <summary>
+    /// The node's resolved terms (Reader contract §15.3), only in records from a search with a terms request
+    /// (<c>SearchOptions.Terms</c>).
+    /// </summary>
+    [JsonPropertyName("terms")]
+    public CitationTerms? Terms { get; init; }
 }
 
 /// <summary>The package part of a citation record.</summary>
@@ -69,7 +76,8 @@ public sealed record CitationPackage(
     [property: JsonPropertyName("signed")] bool Signed,
     [property: JsonPropertyName("signers")] IReadOnlyList<string>? Signers = null,
     [property: JsonPropertyName("issuedCopy")] CitationIssuedCopy? IssuedCopy = null,
-    [property: JsonPropertyName("datePublished")] string? DatePublished = null);
+    [property: JsonPropertyName("datePublished")] string? DatePublished = null,
+    [property: JsonPropertyName("datePackaged")] string? DatePackaged = null);
 
 /// <summary>An issued copy in a citation record (attestations §7.1): the original digest and the issuers.</summary>
 public sealed record CitationIssuedCopy(
@@ -130,6 +138,20 @@ public sealed record CitationNode
     /// <summary>The node's own <c>moca.contributors</c>, as written, when they match the node schema (package spec §4.13). Never the package's.</summary>
     [JsonPropertyName("contributors")]
     public IReadOnlyList<Contributor>? Contributors { get; init; }
+
+    /// <summary>
+    /// The node's licence (Reader contract §7): its <c>terms.nodes</c> entry's <c>rights.license</c>, else the
+    /// manifest's <c>license</c>. A value with a terms problem is skipped.
+    /// </summary>
+    [JsonPropertyName("license")]
+    public string? License { get; init; }
+
+    /// <summary>
+    /// The node's copyright statement, as written (Reader contract §7): its <c>terms.nodes</c> entry's
+    /// <c>rights.copyright</c>, else <c>terms.rights.copyright</c>. A value with a terms problem is skipped.
+    /// </summary>
+    [JsonPropertyName("copyright")]
+    public JsonObject? Copyright { get; init; }
 }
 
 /// <summary>A media description in a citation record (package spec §5.7): never fetched by the Reader.</summary>
@@ -158,7 +180,12 @@ public sealed record CitationSpan(
 /// <summary>A declared generation or verification: <c>by</c> and optional <c>at</c>.</summary>
 public sealed record DeclaredBy(
     [property: JsonPropertyName("by")] string By,
-    [property: JsonPropertyName("at")] string? At = null);
+    [property: JsonPropertyName("at")] string? At = null)
+{
+    /// <summary>For <c>generated</c> only: the model's name and version, when the node states it (package spec §4.14).</summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
+}
 
 /// <summary>Trust signals (Reader contract §7).</summary>
 public sealed record CitationTrust
@@ -257,6 +284,52 @@ public sealed record EvidenceLocation(
 public sealed record CitationRetrieval(
     [property: JsonPropertyName("via")] string Via,
     [property: JsonPropertyName("from")] string? From = null);
+
+/// <summary>One resolved terms field (Reader contract §15.3): its value and the level that decided it.</summary>
+/// <typeparam name="T">The field's type.</typeparam>
+/// <param name="Value">The resolved value.</param>
+/// <param name="DecidedBy"><c>platform</c>, <c>package</c>, <c>node</c>, <c>composite</c> or <c>host</c>.</param>
+public sealed record ResolvedTerm<T>(
+    [property: JsonPropertyName("value")] T Value,
+    [property: JsonPropertyName("decidedBy")] string DecidedBy);
+
+/// <summary>A record's resolved terms (citation-record schema <c>terms</c>; Reader contract §15.3).</summary>
+/// <param name="Authority"><c>packager</c> or <c>unverified</c> (contract §15.2).</param>
+/// <param name="Ai">Each permission of <c>terms.ai</c>, in the same shape.</param>
+/// <param name="Rating">The node's effective rating, as written; a rating that is not an object is shown as <c>{ "explicit": true }</c>.</param>
+/// <param name="Rights">The resolved export permission.</param>
+public sealed record CitationTerms(
+    [property: JsonPropertyName("authority")] string Authority,
+    [property: JsonPropertyName("ai")] CitationAiTerms Ai,
+    [property: JsonPropertyName("rating")] JsonObject? Rating,
+    [property: JsonPropertyName("rights")] CitationRightsTerms? Rights);
+
+/// <summary>Resolved <c>terms.ai</c>.</summary>
+/// <param name="Allowed">The five permissions.</param>
+/// <param name="AnswerSources"><c>model</c> or <c>work</c>.</param>
+/// <param name="ProviderRequires">The conditions a provider must meet, sorted. An unknown or malformed one is kept, so no host can meet it.</param>
+public sealed record CitationAiTerms(
+    [property: JsonPropertyName("allowed")] CitationAllowedTerms Allowed,
+    [property: JsonPropertyName("answerSources")] ResolvedTerm<string> AnswerSources,
+    [property: JsonPropertyName("providerRequires")] ResolvedTerm<IReadOnlyList<string>> ProviderRequires);
+
+/// <summary>Resolved <c>terms.ai.allowed</c>.</summary>
+/// <param name="Device">AI use on the person's own device.</param>
+/// <param name="Host">AI use in the host's own service.</param>
+/// <param name="Provider">AI use with a third party's model.</param>
+/// <param name="Training">Training a model on the work.</param>
+/// <param name="MachineTranslation">Translating the work by machine.</param>
+public sealed record CitationAllowedTerms(
+    [property: JsonPropertyName("device")] ResolvedTerm<bool> Device,
+    [property: JsonPropertyName("host")] ResolvedTerm<bool> Host,
+    [property: JsonPropertyName("provider")] ResolvedTerm<bool> Provider,
+    [property: JsonPropertyName("training")] ResolvedTerm<bool> Training,
+    [property: JsonPropertyName("machineTranslation")] ResolvedTerm<bool> MachineTranslation);
+
+/// <summary>Resolved rights permissions (Reader contract §15.3).</summary>
+/// <param name="Export">Whether an app may let people copy, save or export the work's text. Removes nothing from a search.</param>
+public sealed record CitationRightsTerms(
+    [property: JsonPropertyName("export")] ResolvedTerm<bool> Export);
 
 /// <summary>JSON options for citation records: nulls omitted (except <c>trust.generated</c>), non-ASCII unescaped.</summary>
 public static class CitationJson

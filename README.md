@@ -56,7 +56,7 @@ asks:
 | --- | --- |
 | Class | Reader |
 | Contract version | 0.7.0 |
-| Implemented | Archives, host sources, DSSE attestations, sidecars (lexical and dense), the ontology profile |
+| Implemented | Archives, host sources, DSSE attestations, sidecars (lexical and dense), the ontology profile, the creator's terms (§15) |
 | Encryption | With the `OpenMoca.Reader.Age` package (`ReadOptions.EnvelopeDecryptor = AgeEnvelopeDecryptor.Instance`, plus a `KeyProvider`). Without it, an envelope is recognised and reported with `E001`, and nothing inside it is exposed. Decrypted bytes stay in memory |
 | Sigstore | Offline only, with the `OpenMoca.Reader.Sigstore` package (`ReadOptions.SigstoreVerifier = new SigstoreVerifier()`), against the trust root's `sigstore.trustedRoot`. Without the package, or without a trusted root, a `*.sigstore.json` attestation is unverifiable (`A003`). There is no online mode: refresh the trusted root yourself (moca-spec attestations §6) |
 
@@ -72,7 +72,24 @@ foreach (var record in await library.SearchAsync("refund window"))
 ```
 
 A malformed package never throws: `result.Valid` is false and
-`result.Diagnostics` says why. The Reader never reaches the network, or any
+`result.Diagnostics` says why.
+
+The creator's terms (`terms` in the manifest) are exposed as written in
+`result.Terms`, with their problems and who stated them; reading a package
+never applies them. A host about to hand records to a model, or to show them
+under a rating filter, asks the search to apply them:
+
+```csharp
+var records = await search.SearchAsync("refund window", new SearchOptions
+{
+    // A third party's model, which promises not to train on what it is sent.
+    Terms = new TermsRequest { Ai = new AiRequest(TermsDestinations.Provider, Conditions: ["noTraining"]) },
+});
+```
+
+Records the terms do not allow are left out and counted in
+`search.Diagnostics` (`U004`), and each record carries its resolved terms.
+Without a terms request, terms change nothing. The Reader never reaches the network, or any
 file outside the package, because a package names it.
 
 `src/OpenMoca.Reader/Schemas/` holds byte-identical copies of moca-spec's
@@ -128,7 +145,12 @@ are reference material, never instructions
 ([Reader contract §12](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#12-handing-content-to-a-model)).
 The whole records are in the message's `AdditionalProperties["moca.citations"]`.
 Every tool call goes through the same `MocaSearch`, so the model cannot widen
-its audience filter.
+its audience filter. The creator's terms apply to everything the provider and
+the tools hand the model
+([Reader contract §15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#154-the-terms-gate)):
+by default as a third party's model with no conditions. Set
+`MocaContextOptions.Terms` (or pass a `TermsRequest` to `MocaTools`) when the
+model runs on the person's device or in your own service.
 
 ```csharp
 using OpenMoca.Reader.VectorData;
@@ -200,6 +222,30 @@ node tests/OpenMoca.Reader.Parity/parity.mjs
    publishing: `OpenMoca.Reader` first, then the packages that depend on it.
    No NuGet API key is kept anywhere.
 5. Publish a GitHub release whose notes are the changelog section.
+
+## Standards
+
+What this Reader uses, and how strongly. **Follow** means we implement it and
+the tests check it where they can; **map to** means only an informative
+mapping, in the specification.
+
+| Standard | Where | How strongly |
+| --- | --- | --- |
+| [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/ad30107c31c06aec8a7d5636e0d1058118604e6f/SPEC.md) v0.2, pinned at commit `ad30107` | `content/` is an OKF bundle | follow (pinned) |
+| [JSON Schema 2020-12](https://json-schema.org/draft/2020-12) | the embedded schemas, byte-identical to moca-spec's | follow |
+| [Ed25519](https://www.rfc-editor.org/rfc/rfc8032) (RFC 8032) and [in-toto Statement v1](https://github.com/in-toto/attestation) in DSSE envelopes | package and review attestations | follow |
+| [Sigstore](https://www.sigstore.dev/) bundles | `OpenMoca.Reader.Sigstore`: offline only; issuer and subject compared exactly | follow |
+| [age v1](https://age-encryption.org/v1) (X25519 and scrypt recipients) | `OpenMoca.Reader.Age`: encrypted packages, decrypt only | follow |
+| [SKOS](https://www.w3.org/TR/skos-reference/) and [Dublin Core terms](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/) in RDF 1.1 Turtle | `structure.ttl` | follow (the named terms) |
+| [WebVTT](https://www.w3.org/TR/webvtt1/) | transcripts that evidence cites | follow |
+| [BCP 47](https://www.rfc-editor.org/info/bcp47) | `language`, `locales`, search locales | follow |
+| [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | dates, validity windows, `datePackaged` | follow |
+| [SPDX licence expressions](https://spdx.org/licenses/) | `license`, and a node's licence in citation records | follow (exposed as written) |
+| [MARC relator codes](https://id.loc.gov/vocabulary/relators.html) | credit `roles` | follow (exposed as written) |
+| [schema.org](https://schema.org/) | `datePublished`, `contentRating`, `typicalAgeRange`, copyright | map to |
+| [ONNX](https://onnx.ai/) via ONNX Runtime | `OpenMoca.Reader.Onnx`: the standard embedding models | follow |
+
+Built with the help of AI assistants; every change is reviewed and accepted by the maintainer.
 
 ## Licence
 

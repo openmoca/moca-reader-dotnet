@@ -139,7 +139,17 @@ public static class SidecarBinder
         }
 
         var outline = package.Envelope.Outline;
-        var (plain, code, message) = await MocaReader.OpenAgeEntryAsync(archive.Read("index.age"), "index", outline, options, cancellationToken).ConfigureAwait(false);
+        byte[] indexBytes;
+        try
+        {
+            indexBytes = archive.Read("index.age");
+        }
+        catch (IOException ex)
+        {
+            return Fail(DiagnosticCodes.S001SidecarInvalid, $"index.age could not be read: {ex.Message}", "index.age");
+        }
+
+        var (plain, code, message) = await MocaReader.OpenAgeEntryAsync(indexBytes, "index", outline, options, cancellationToken).ConfigureAwait(false);
         if (plain is null)
         {
             return Fail(code!, message!, "index.age");
@@ -159,7 +169,21 @@ public static class SidecarBinder
         return Bind(index, package, diagnostics);
     }
 
+    // A sidecar entry that cannot be read makes the sidecar unusable (S001); it never escapes as an exception.
     private static SidecarBinding Bind(IPackageSource source, PackageResult package, DiagnosticBag diagnostics)
+    {
+        try
+        {
+            return BindChecked(source, package, diagnostics);
+        }
+        catch (IOException ex)
+        {
+            diagnostics.Add(DiagnosticCodes.S001SidecarInvalid, $"a sidecar entry could not be read: {ex.Message}");
+            return new SidecarBinding(false, null, [], diagnostics.Items);
+        }
+    }
+
+    private static SidecarBinding BindChecked(IPackageSource source, PackageResult package, DiagnosticBag diagnostics)
     {
         var listed = source.List().Where(e => e.Kind == PackageEntryKind.File).Select(e => e.Path).ToHashSet(StringComparer.Ordinal);
         SidecarBinding Fail(JsonObject? index = null) => new(false, index, [], diagnostics.Items);
@@ -173,7 +197,7 @@ public static class SidecarBinder
         JsonObject? index;
         try
         {
-            index = JsonNode.Parse(Encoding.UTF8.GetString(source.Read(ManifestFile))) as JsonObject;
+            index = JsonValues.Parse(Encoding.UTF8.GetString(source.Read(ManifestFile))) as JsonObject;
         }
         catch (JsonException ex)
         {
@@ -245,7 +269,7 @@ public static class SidecarBinder
             JsonObject? item;
             try
             {
-                item = JsonNode.Parse(lines[i]) as JsonObject;
+                item = JsonValues.Parse(lines[i]) as JsonObject;
             }
             catch (JsonException)
             {

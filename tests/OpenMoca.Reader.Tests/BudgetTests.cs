@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using OpenMoca.Reader.Diagnostics;
@@ -12,6 +11,7 @@ namespace OpenMoca.Reader.Tests;
 /// moca-reader-typescript's test/budgets.test.js. Each sets a time budget, and the composition tests a memory budget,
 /// that the quadratic versions broke by orders of magnitude.
 /// </summary>
+[Collection(Measured.Name)]
 public sealed class BudgetTests : IDisposable
 {
     private const string Id = "https://example.com/budget";
@@ -60,16 +60,13 @@ public sealed class BudgetTests : IDisposable
         };
 
         var allocated = GC.GetTotalAllocatedBytes(precise: true);
-        var watch = Stopwatch.StartNew();
         var result = await MocaReader.ReadPackageAsync(top, new ReadOptions { ResolveMember = counting }, ct);
-        watch.Stop();
         allocated = GC.GetTotalAllocatedBytes(precise: true) - allocated;
 
         Assert.True(result.Valid);
         Assert.Equal(2 * n, calls); // each distinct member is resolved once
         Assert.All(result.Members, m => Assert.Equal("resolved", m.Status));
         Assert.All(result.Members[0].Result!.Members, m => Assert.Equal("resolved", m.Status));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30), $"read in {watch.Elapsed}");
         Assert.True(allocated < 2L * 1024 * 1024 * 1024, $"allocated {allocated / 1048576} MiB");
 
         // The byte budget: past it, no further member is resolved (R001).
@@ -81,32 +78,41 @@ public sealed class BudgetTests : IDisposable
     public async Task ALongReadingOrderOverASharedSubtree_ResolvesInLinearTime()
     {
         var ct = TestContext.Current.CancellationToken;
-        const int n = 3000;
+        // Linear work doubles with the order's length; quadratic work would quadruple. Counted in bytes allocated, with
+        // this collection running on its own, never in time.
+        var (small, _) = await ReadOrderAsync(1500, ct);
+        var (large, positions) = await ReadOrderAsync(3000, ct);
+
+        Assert.Equal(0, positions[$"{Id}/order3000#c{3000 - 1}"]); // the first member that reaches a concept places it
+        Assert.Equal(3000 - 1, positions[$"{Id}/order3000#m{3000 - 1}"]);
+        Assert.True(large < 3 * small, $"{small} bytes for 1,500 members, {large} for 3,000");
+    }
+
+    private async Task<(long Allocated, IReadOnlyDictionary<string, int> Positions)> ReadOrderAsync(int n, CancellationToken ct)
+    {
+        var name = $"order{n}";
         var ttl = new StringBuilder("@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n@prefix dcterms: <http://purl.org/dc/terms/> .\n");
-        ttl.Append($"<{Id}/order#list> a skos:OrderedCollection ; skos:memberList ( ")
-            .AppendJoin(' ', Enumerable.Range(0, n).Select(i => $"<{Id}/order#m{i}>")).Append(" ) .\n");
+        ttl.Append($"<{Id}/{name}#list> a skos:OrderedCollection ; skos:memberList ( ")
+            .AppendJoin(' ', Enumerable.Range(0, n).Select(i => $"<{Id}/{name}#m{i}>")).Append(" ) .\n");
         for (var i = 0; i < n; i++)
         {
-            ttl.Append($"<{Id}/order#m{i}> a skos:Concept ; dcterms:hasPart <{Id}/order#c0> .\n");
+            ttl.Append($"<{Id}/{name}#m{i}> a skos:Concept ; dcterms:hasPart <{Id}/{name}#c0> .\n");
         }
 
         for (var i = 0; i < n; i++)
         {
-            ttl.Append($"<{Id}/order#c{i}> a skos:Concept").Append(i + 1 < n ? $" ; dcterms:hasPart <{Id}/order#c{i + 1}>" : "").Append(" .\n");
+            ttl.Append($"<{Id}/{name}#c{i}> a skos:Concept").Append(i + 1 < n ? $" ; dcterms:hasPart <{Id}/{name}#c{i + 1}>" : "").Append(" .\n");
         }
 
-        var dir = Package("order", new { id = $"{Id}/order", title = "Order", readingOrder = $"{Id}/order#list" },
+        var dir = Package(name, new { id = $"{Id}/{name}", title = "Order", readingOrder = $"{Id}/{name}#list" },
             new Dictionary<string, string> { ["content/a.md"] = Node("A"), ["structure.ttl"] = ttl.ToString() });
 
-        var watch = Stopwatch.StartNew();
+        var allocated = GC.GetTotalAllocatedBytes(precise: true);
         var result = await MocaReader.ReadPackageAsync(dir, cancellationToken: ct);
-        watch.Stop();
+        allocated = GC.GetTotalAllocatedBytes(precise: true) - allocated;
 
         Assert.True(result.Valid);
-        var positions = result.ResolvedReadingOrder!.Positions;
-        Assert.Equal(0, positions[$"{Id}/order#c{n - 1}"]); // the first member that reaches a concept places it
-        Assert.Equal(n - 1, positions[$"{Id}/order#m{n - 1}"]);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"read in {watch.Elapsed}");
+        return (allocated, result.ResolvedReadingOrder!.Positions);
     }
 
     [Fact]
@@ -136,20 +142,17 @@ public sealed class BudgetTests : IDisposable
             (_, _) => ValueTask.FromResult<PackageTarget?>(member);
 
         var allocated = GC.GetTotalAllocatedBytes(precise: true);
-        var watch = Stopwatch.StartNew();
         var result = await MocaReader.ReadPackageAsync(composer, new ReadOptions { ResolveMember = resolve }, ct);
         Assert.True(result.Valid);
         var size = JsonSerializer.Serialize(PackageState.From(result)).Length;
         var library = new Library().Add(result);
         var records = await new MocaSearch(library, new LexicalBackend(library)).SearchAsync("node", new SearchOptions { Scope = $"{Id}/composer#c0", Limit = 100 }, ct);
         var listed = library.Structure.Nodes($"{Id}/composer#c0");
-        watch.Stop();
         allocated = GC.GetTotalAllocatedBytes(precise: true) - allocated;
 
         Assert.Equal(100, records.Count); // search under the top of the chain finds bound nodes
         Assert.Equal(n, listed.Count); // nodes() lists every bound node under the top of the chain
         Assert.True(size < 1024 * 1024, $"package state is {size} bytes");
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30), $"read and searched in {watch.Elapsed}");
         Assert.True(allocated < 2L * 1024 * 1024 * 1024, $"allocated {allocated / 1048576} MiB");
     }
 
@@ -161,11 +164,12 @@ public sealed class BudgetTests : IDisposable
         var cues = Enumerable.Range(0, 4096).Select(i => new OpenMoca.Reader.Content.VttCue(i, i + 1, text)).ToList();
         foreach (var exact in new[] { "a", string.Concat(Enumerable.Repeat("a ", 4096)).Trim() })
         {
-            var watch = Stopwatch.StartNew();
+            var steps = OpenMoca.Reader.Content.TextWork.Steps;
             var located = OpenMoca.Reader.Content.EvidenceText.LocateQuote(cues, (0, 4096), new System.Text.Json.Nodes.JsonObject { ["type"] = "TextQuoteSelector", ["exact"] = exact });
-            watch.Stop();
+            steps = OpenMoca.Reader.Content.TextWork.Steps - steps;
             Assert.NotNull(located);
-            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{exact.Length}-character quote located in {watch.Elapsed}");
+            // Counted in steps, not time: a linear search over 4 MiB of cues.
+            Assert.True(steps <= 3L * 4096 * text.Length, $"{exact.Length}-character quote located in {steps} steps");
         }
     }
 
