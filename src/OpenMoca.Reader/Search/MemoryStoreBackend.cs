@@ -22,10 +22,22 @@ public sealed class MemoryStoreBackend(IEmbedder? embedder = null, bool filterPu
     /// <inheritdoc/>
     public IReadOnlyList<Diagnostic> Diagnostics => [];
 
+    /// <summary>The findings of the latest ingest: U004 when its terms request left units out (Reader contract §9.4).</summary>
+    public IReadOnlyList<Diagnostic> IngestDiagnostics { get; private set; } = [];
+
     /// <summary>Ingests every node representation (or sidecar chunk) of every package, through citation records.</summary>
-    public async Task<MemoryStoreBackend> IngestAsync(Library library, CancellationToken cancellationToken = default)
+    public Task<MemoryStoreBackend> IngestAsync(Library library, CancellationToken cancellationToken = default) =>
+        IngestAsync(library, new IngestOptions(), cancellationToken);
+
+    /// <summary>
+    /// Ingests every node representation (or sidecar chunk) of every package, through citation records. With a terms
+    /// request (Reader contract §9.4, moca-spec ADR-0041), a unit the gate removes for the embedder's destination is
+    /// never embedded or stored, and <see cref="IngestDiagnostics"/> reports U004.
+    /// </summary>
+    public async Task<MemoryStoreBackend> IngestAsync(Library library, IngestOptions options, CancellationToken cancellationToken = default)
     {
-        var pending = StoreUnit.From(library)
+        ArgumentNullException.ThrowIfNull(options);
+        var pending = StoreUnit.From(library, options, out var findings)
             .Select(u => (u.Hit, u.Text, u.Record, Concepts: u.Record.Concepts ?? []))
             .ToList();
 
@@ -41,6 +53,7 @@ public sealed class MemoryStoreBackend(IEmbedder? embedder = null, bool filterPu
             _records.Add((p.Hit, p.Text, p.Record, p.Concepts, vectors?[i]));
         }
 
+        IngestDiagnostics = findings;
         return this;
     }
 
