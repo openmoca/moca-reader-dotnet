@@ -10,6 +10,34 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
 [moca-spec#8](https://github.com/openmoca/moca-spec/issues/8) and
 [moca-spec#9](https://github.com/openmoca/moca-spec/issues/9)).
 
+### Changed (limits, exact rules and signer binding)
+
+For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there and unit tests here.
+
+- **`ids` bind a signer to package ids** (moca-spec ADR-0040). A trust-root key or Sigstore identity with `ids` signs
+  only packages whose `id` its `ids` cover; otherwise `A010_SIGNER_NOT_FOR_PACKAGE` (error), the attestation is
+  `invalid`, and the package is not `signed` and does not meet `RequireSignature`. An entry without `ids` signs any id.
+- A signature counts only when its outcome is exactly `valid`; any other outcome from a verifier is `A002`.
+- **New limits** (contract §3): `ReaderLimits.MaxAttestations` (256) and `MaxAttestationBytes` (1 MiB), `A001` past
+  either; at most 16 signature entries in one DSSE envelope; and the members of every collection in a structure file,
+  added together, counted against `MaxTriples` (`O001`), a shared list walked once.
+- **Archives** (contract §3): one hand-written central-directory reader replaces `ZipArchive`. Exactly one end record,
+  no multi-disk or Zip64 archive, a directory that holds what it declares, and local headers whose name and method
+  match it, all checked before any entry is read (`T003`); declared sizes are summed before anything is inflated. An
+  entry is read only with method 0 or 8 and no encryption flag, and must give exactly its declared length and CRC-32
+  (`P002`). An archive too large to hold in memory is `T003`.
+- **Parsing depth**: YAML front matter nested deeper than 64 levels is `C002`; a `structure.ttl` nested deeper than
+  256 brackets is `O001`, checked in one pass before the Turtle parser runs.
+- **A read never throws for what a package holds**: a JSON string with an unpaired surrogate escape is invalid JSON
+  (I-JSON, RFC 7493): `M001`, `A001`, `E005` or `S001` by file; an unreadable envelope entry is `P002` and an unreadable
+  sidecar entry `S001`; image paths are normalised safely. Anything else unexpected becomes one `P002` and an invalid
+  result; only cancellation and programmer errors throw.
+- **Text work is linear**: links, HTML tags and quotes in node bodies and evidence sources are scanned in one pass
+  (with a Knuth-Morris-Pratt quote search), giving the same results as before. A link target in angle brackets loses
+  them, as in the reference Reader.
+- **Directory sources** read regular files only: a named pipe, device or socket is `P001`, and an entry that reports
+  no bytes is never opened.
+
 ### Added (the creator's terms: package spec §4.14, Reader contract §15)
 
 - `PackageResult.Terms` (`PackageTerms`): the manifest's `terms` exactly as written (`Declared`), their problems
