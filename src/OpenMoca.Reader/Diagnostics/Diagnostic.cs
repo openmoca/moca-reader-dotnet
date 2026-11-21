@@ -16,4 +16,20 @@ public sealed record Diagnostic(
     [property: JsonPropertyName("severity")] DiagnosticSeverity Severity,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("file"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? File = null,
-    [property: JsonPropertyName("line"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Line = null);
+    [property: JsonPropertyName("line"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Line = null)
+{
+    /// <summary>
+    /// For <c>U004_TERMS_EXCLUDED</c> (Reader contract §15.4): the number of records or units the terms request removed,
+    /// for each reason (one removed for two reasons counts under each). Null on every other finding.
+    /// </summary>
+    [JsonPropertyName("excluded"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, int>? Excluded { get; init; }
+
+    /// <summary>
+    /// For <c>U004_TERMS_EXCLUDED</c> (Reader contract §15.4): how many of the removed records or units belong to
+    /// packages hidden for the request. A host takes these out of every count it hands to a model. Null on every other
+    /// finding.
+    /// </summary>
+    [JsonPropertyName("hidden"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Hidden { get; init; }
+}

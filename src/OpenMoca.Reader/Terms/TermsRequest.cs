@@ -151,6 +151,11 @@ public sealed record TermsLimits
     /// <summary><c>ai.allowed.machineTranslation</c>.</summary>
     public bool? MachineTranslation { get; init; }
 
+    /// <summary>
+    /// <c>ai.allowed.mention</c>: false hides every package closed for a request from the model (moca-spec ADR-0041).
+    /// </summary>
+    public bool? Mention { get; init; }
+
     /// <summary><c>ai.answerSources</c>: <c>work</c> or <c>model</c>.</summary>
     public string? AnswerSources { get; init; }
 
@@ -170,6 +175,7 @@ public sealed record TermsLimits
             Provider = Bool(allowed?["provider"]),
             Training = Bool(allowed?["training"]),
             MachineTranslation = Bool(allowed?["machineTranslation"]),
+            Mention = Bool(allowed?["mention"]),
             AnswerSources = JsonValues.StringOf(json["answerSources"]),
             ProviderRequires = json["providerRequires"] is JsonArray p ? [.. p.Select(JsonValues.StringOf).OfType<string>()] : null,
         };
@@ -192,6 +198,7 @@ public sealed record TermsLimits
         Put("provider", Provider);
         Put("training", Training);
         Put("machineTranslation", MachineTranslation);
+        Put("mention", Mention);
         var ai = new JsonObject { ["allowed"] = allowed };
         if (AnswerSources is not null)
         {
