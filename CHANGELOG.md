@@ -10,6 +10,35 @@ For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/
 [moca-spec#8](https://github.com/openmoca/moca-spec/issues/8) and
 [moca-spec#9](https://github.com/openmoca/moca-spec/issues/9)).
 
+### Added (what the terms gate covers: moca-spec ADR-0041; Reader contract §9.4, §10, §15.3, §15.4)
+
+Everything the Reader hands to a model goes through the creator's terms, not only search records.
+
+- **`ai.allowed.mention`**: whether a model that may not receive the work may be told it exists. Platform default
+  `true`; resolved like every `allowed.*` field (the stricter value applies whatever its authority); package level
+  only (in a `nodes` entry it is `U003` and has no effect); a malformed value or container fails closed.
+  `CitationAllowedTerms` gains `Mention` (a new positional parameter) and `TermsLimits` gains `Mention`.
+- **Closed and hidden**: `TermsRules.ClosureOf` and `PackageClosure` (contract §15.4), from a package's package-level
+  resolved terms for the request's destination and conditions. A use never closes a package. `Library.ClosureOf`
+  answers it for a loaded package.
+- **`Library.Catalogue(CatalogueOptions)`** and **`CatalogueEntry`** (`catalogue-entry.schema.json`): an open
+  package's full entry; a closed one's exactly id, version, title, publisher, signed and `ClosedBy`; no entry for a
+  hidden package, one outside the audience set or the default retrieval policy, or one whose own rating the rating
+  gate removes. An open composite lists only members with their own entry.
+- **`Library.StructureFor(terms, termsLimits)`**: the structure operations over the packages not closed for the
+  request, and the overlays (contract §10).
+- **Ingest with a terms request** (`IngestOptions`): `MemoryStoreBackend` and `VectorStoreBackend`
+  (`OpenMoca.Reader.VectorData`) never embed or store a unit the gate removes for the embedder's destination, and
+  report `U004` in `IngestDiagnostics`; `VectorStoreBackend` also deletes what an earlier ingest stored for it.
+  `StoreUnit.From(library, options, out diagnostics)` for other store bindings. Without a request, nothing changes.
+- **`U004` counts**: `Diagnostic.Excluded` (removed per reason) and `Diagnostic.Hidden` (how many came from packages
+  hidden for the request). In a record from a search with a terms request, `supersededBy` and `contestedBy` name no
+  hidden package.
+- **Agent Framework**: `MocaTools` and `MocaContextProvider` refuse a terms request with no `ai` part unless the host
+  sets `allowNoAiTerms` / `AllowNoAiTerms`; `moca_structure` answers from `StructureFor`.
+- Schemas re-vendored: `terms`, `citation-record` and the new `catalogue-entry`. The conformance adapter supports the
+  `catalogue` case kind, `options.terms` on structure cases, `options.ingestTerms` and `termsExcluded`.
+
 ### Changed (limits, exact rules and signer binding)
 
 For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there and unit tests here.
