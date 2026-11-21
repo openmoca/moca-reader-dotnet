@@ -175,6 +175,16 @@ translate the filters, pass `filterPushdown: false`; the gate still applies
 them. Keys are strings or GUIDs made from each unit, so ingesting a package
 again replaces it, and `RemoveAsync(digest)` drops it.
 
+**Embedding does not apply the creator's terms yet.** `DenseBackend`,
+`EmbeddingGeneratorEmbedder` (`OpenMoca.Reader.Extensions.AI`) and
+`VectorStoreBackend` (`OpenMoca.Reader.VectorData`) pass each unit's text to
+your embedder whatever the package's terms say, and the Reader contract counts
+embedding as a use of the text
+([§15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#154-the-terms-gate)).
+If you embed with a third party's model, check the terms first: read
+`result.Terms` for each package and leave out what they do not allow. The
+terms gate for embedding comes in a 0.7.x release.
+
 ## Develop
 
 You need the .NET 10 SDK. The tests read moca-spec's examples and run its

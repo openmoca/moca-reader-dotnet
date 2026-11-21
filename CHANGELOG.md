@@ -30,8 +30,10 @@ For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there an
   being level 1, fixed rather than left to a parser's default. Deeper text is refused as it is read, without
   recursion, with the code its kind of file has for text that does not parse: `M001` for `moca.json`, `C002` for a
   node's front matter (`C004` for a reserved file), `A001` for an attestation file or its statement, `E005` for
-  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` nested deeper
-  than 256 brackets is `O001`, checked in one pass before the Turtle parser runs.
+  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` whose blank
+  nodes and collections nest deeper than 256 levels is `O001`, checked in one pass before the Turtle parser runs. The
+  check counts the parser's own tokens, so it follows Turtle's rules for names (escaped characters included), IRIs,
+  strings and comments.
 - **A read never throws for what a package holds**: a JSON string with an unpaired surrogate escape is invalid JSON
   (I-JSON, RFC 7493): `M001`, `A001`, `E005` or `S001` by file; an unreadable envelope entry is `P002` and an unreadable
   sidecar entry `S001`; image paths are normalised safely. Anything else unexpected becomes one `P002` and an invalid
@@ -39,7 +41,8 @@ For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there an
 - **Text work is linear**: links, HTML tags and quotes in node bodies and evidence sources are scanned in one pass
   (with a Knuth-Morris-Pratt quote search), giving the same results as before; a link's target is copied only once
   the link is known to close. The tests count the scanners' steps and bytes, not time. A link target in angle brackets loses
-  them, as in the reference Reader.
+  them, as in the reference Reader. The prefixes a `structure.ttl` declares are found by a one-pass line scanner,
+  giving the same prefixes as before.
 - **Directory sources** read regular files only: a named pipe, device or socket is `P001`, and an entry that reports
   no bytes is never opened.
 
@@ -70,6 +73,9 @@ For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there an
 - OpenMoca.Reader.AgentFramework applies the creator's terms to everything it hands a model, on each turn and in
   every tool (contract §15.4): `MocaContextOptions.Terms` and `MocaTools(search, terms)`, by default
   `TermsRequest.Provider` (a third party's model, no conditions).
+- The embedding backends (`DenseBackend`, OpenMoca.Reader.Extensions.AI, OpenMoca.Reader.VectorData) do not apply the
+  terms yet; the README says so, and that a host embedding with a third party's model checks the terms first. The
+  gate for embedding comes in 0.7.x.
 
 ### Added (rights and dates: package spec §4.12, §4.14; Reader contract §7, §15.3)
 
