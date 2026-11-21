@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using OpenMoca.Reader.Content;
@@ -92,14 +91,54 @@ public sealed class TextScannerTests
 
     [Theory]
     [MemberData(nameof(Hostile))]
-    public void Scanners_OnTextThatWasSlow_FinishQuickly(string name, string text)
+    public void Scanners_OnTextThatWasSlow_DoWorkInProportionToTheText(string name, string text)
     {
-        var clock = Stopwatch.StartNew();
+        // Contract §3: work is bounded by the size of what is read. Counted in steps (characters examined or copied),
+        // never in time, so the check means the same on every machine.
+        long StepsFor(Action scan)
+        {
+            var before = TextWork.Steps;
+            scan();
+            return TextWork.Steps - before;
+        }
+
+        var links = StepsFor(() => ContentReader.LinkTargets(text));
+        var markdown = StepsFor(() => EvidenceText.MarkdownText(text));
+        var html = StepsFor(() => EvidenceText.HtmlText(text));
+        var haystack = new string('a', 1_000_000);
+        var quote = StepsFor(() => EvidenceText.ContainsLinear(haystack, new string('a', 50_000) + "b"));
+
+        // Copies count too: bytes allocated on this thread, the same on every run.
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         ContentReader.LinkTargets(text);
         EvidenceText.MarkdownText(text);
         EvidenceText.HtmlText(text);
-        EvidenceText.ContainsLinear(new string('a', 1_000_000), new string('a', 50_000) + "b");
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"{name} took {clock.Elapsed}");
+        Assert.True(links <= 8L * text.Length, $"{name}: links took {links} steps for {text.Length} characters");
+        Assert.True(allocated <= 64L * text.Length, $"{name}: {allocated} bytes allocated for {text.Length} characters");
+        Assert.True(markdown <= 16L * text.Length, $"{name}: Markdown took {markdown} steps for {text.Length} characters");
+        Assert.True(html <= 16L * text.Length, $"{name}: HTML took {html} steps for {text.Length} characters");
+        Assert.True(quote <= 3L * haystack.Length, $"quote search took {quote} steps for {haystack.Length} characters");
+    }
+
+    [Theory]
+    [MemberData(nameof(Hostile))]
+    public void Scanners_TwiceTheText_TwiceTheWork(string name, string text)
+    {
+        long StepsFor(string t)
+        {
+            var before = TextWork.Steps;
+            ContentReader.LinkTargets(t);
+            EvidenceText.MarkdownText(t);
+            EvidenceText.HtmlText(t);
+            return TextWork.Steps - before;
+        }
+
+        var half = StepsFor(text[..(text.Length / 2)]);
+        var whole = StepsFor(text);
+
+        // Linear work doubles; quadratic work would quadruple.
+        Assert.True(whole <= (2 * half) + 64, $"{name}: {half} steps for half the text, {whole} for all of it");
     }
 }

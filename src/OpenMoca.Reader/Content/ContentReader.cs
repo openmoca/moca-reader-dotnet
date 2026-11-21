@@ -51,6 +51,7 @@ internal static partial class ContentReader
                 stopAt = -1;
                 for (var k = from; k < line.Length; k++)
                 {
+                    TextWork.Add(1);
                     if (line[k] == ')' || IsSpace(line[k]))
                     {
                         stopAt = k;
@@ -70,6 +71,7 @@ internal static partial class ContentReader
                 e = p;
                 while (e < line.Length && IsSpace(line[e]))
                 {
+                    TextWork.Add(1);
                     e++;
                 }
 
@@ -118,6 +120,7 @@ internal static partial class ContentReader
         var pos = 0;
         while (true)
         {
+            TextWork.Add(1);
             var i = open.From(pos);
             if (i < 0)
             {
@@ -130,8 +133,10 @@ internal static partial class ContentReader
                 break;
             }
 
+            // The target's bounds; the text is copied only for a link that closes, so a run of unclosed links copies
+            // nothing.
             var end = -1;
-            string? target = null;
+            var (from, to) = (0, 0);
             if (At(j + 1) == '(')
             {
                 var p = SkipSpace(j + 2);
@@ -141,7 +146,7 @@ internal static partial class ContentReader
                     if (q > p + 1)
                     {
                         end = afterAngle(q + 1);
-                        target = line[p..(q + 1)];
+                        (from, to) = (p, q + 1);
                     }
                 }
 
@@ -151,7 +156,7 @@ internal static partial class ContentReader
                     if (e > p)
                     {
                         end = afterPlain(e);
-                        target = line[p..e];
+                        (from, to) = (p, e);
                     }
                 }
             }
@@ -163,7 +168,8 @@ internal static partial class ContentReader
                 continue;
             }
 
-            targets.Add(target!);
+            TextWork.Add(to - from);
+            targets.Add(line[from..to]);
             pos = end;
         }
 

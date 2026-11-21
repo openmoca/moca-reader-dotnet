@@ -124,13 +124,20 @@ public static partial class EvidenceText
     public static string MarkdownText(string source)
     {
         var linksDone = LinkText(source);
+        // Steps 2 and 3: anchored line markers and a one-character class, one pass each.
+        TextWork.Add(3L * linksDone.Length);
         var lines = linksDone.Split('\n').Select(line => ListMarker().Replace(HeadingMarker().Replace(line, ""), ""));
         return Emphasis().Replace(string.Join('\n', lines), "");
     }
 
     /// <summary>HTML to text: script and style elements removed, tags removed, character references decoded.</summary>
-    public static string HtmlText(string source) =>
-        DecodeEntities(StripTags(StripScriptAndStyle(source)));
+    public static string HtmlText(string source)
+    {
+        var stripped = StripTags(StripScriptAndStyle(source));
+        // Each reference starts at "&" and stops at the next character outside its set: one pass.
+        TextWork.Add(stripped.Length);
+        return DecodeEntities(stripped);
+    }
 
     /// <summary>
     /// A forward search for one character that remembers its last answer, so searches from rising positions cost one
@@ -145,6 +152,7 @@ public static partial class EvidenceText
             if (_at != -1 && _at < from)
             {
                 _at = from >= text.Length ? -1 : text.IndexOf(needle, from);
+                TextWork.Add((_at < 0 ? text.Length : _at + 1) - Math.Min(from, text.Length));
             }
 
             return _at;
@@ -164,6 +172,7 @@ public static partial class EvidenceText
         var pos = 0;
         while (true)
         {
+            TextWork.Add(1);
             var i = open.From(pos);
             if (i < 0)
             {
@@ -187,16 +196,19 @@ public static partial class EvidenceText
                     break;
                 }
 
+                TextWork.Add(j + 1 - pos);
                 output.Append(source, pos, j + 1 - pos);
                 pos = j + 1;
                 continue;
             }
 
             var start = i > pos && source[i - 1] == '!' ? i - 1 : i;
+            TextWork.Add(end + 1 - pos);
             output.Append(source, pos, start - pos).Append(source, i + 1, j - i - 1);
             pos = end + 1;
         }
 
+        TextWork.Add(source.Length - pos);
         return output.Append(source, pos, source.Length - pos).ToString();
     }
 
@@ -219,10 +231,13 @@ public static partial class EvidenceText
                 break;
             }
 
+            TextWork.Add(j + 1 - pos);
             output.Append(text, pos, i - pos);
             pos = j + 1;
         }
 
+        // The last searches covered the rest of the text once.
+        TextWork.Add(2 * (text.Length - pos));
         return output.Append(text, pos, text.Length - pos).ToString();
     }
 
@@ -239,6 +254,7 @@ public static partial class EvidenceText
         while (true)
         {
             var m = OpeningScriptOrStyle().Match(source, pos);
+            TextWork.Add((m.Success ? m.Index + m.Length : source.Length) - pos);
             if (!m.Success)
             {
                 break;
@@ -257,6 +273,9 @@ public static partial class EvidenceText
             {
                 var closing = (name == "script" ? ClosingScript() : ClosingStyle()).Match(source, tagEnd + 1);
                 end = closing.Success ? closing.Index + closing.Length : -1;
+                // A closing tag is searched for past each opening once at most: one found is consumed, and one not
+                // found is never searched for again.
+                TextWork.Add((closing.Success ? end : source.Length) - tagEnd);
                 unclosed[name] = !closing.Success;
             }
 
@@ -541,8 +560,10 @@ public static partial class EvidenceText
 
         for (int i = 0, k = 0; i < text.Length; i++)
         {
+            TextWork.Add(1);
             while (k > 0 && text[i] != needle[k])
             {
+                TextWork.Add(1);
                 k = fail[k - 1];
             }
 
@@ -744,4 +765,20 @@ public static partial class EvidenceText
     }
 
     internal static string Utf8(byte[] bytes) => Encoding.UTF8.GetString(bytes);
+}
+
+/// <summary>
+/// The work the text scanners do, counted in characters examined or copied, per thread (contract §3: work is bounded by
+/// the size of what is read). The tests check that it stays within a constant times the length of the input; it is
+/// never used to decide anything.
+/// </summary>
+internal static class TextWork
+{
+    [ThreadStatic]
+    private static long _steps;
+
+    /// <summary>The steps counted on this thread so far.</summary>
+    internal static long Steps => _steps;
+
+    internal static void Add(long steps) => _steps += steps;
 }
