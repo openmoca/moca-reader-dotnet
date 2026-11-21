@@ -1,0 +1,55 @@
+name: Security
+
+# Security baseline: secrets in the whole history, known-vulnerable dependencies, and static analysis
+# (codeql.yml). Public repository, so it runs on every pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks 8.30.1 (checksum-checked)
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # Every commit, with .gitleaks.toml's allowlist (published test keys and file digests only).
+      - run: gitleaks git --no-banner --redact --verbose .
+
+  nuget:
+    name: Dependencies (NuGet advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
+        with:
+          global-json-file: global.json
+      - run: dotnet restore
+      # OSV-Scanner can't read central package versions without lock files, so .NET uses NuGet's own advisory
+      # check (the GitHub Advisory Database), transitive packages included.
+      - name: No vulnerable packages
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > "$RUNNER_TEMP/vulnerable.json"
+          found=$(jq '[.projects[].frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?) | select(.vulnerabilities)] | length' "$RUNNER_TEMP/vulnerable.json")
+          if [ "$found" != 0 ]; then
+            jq -r '.projects[] | .path as $p | .frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?) | select(.vulnerabilities) | "\($p): \(.id) \(.resolvedVersion) \([.vulnerabilities[].advisoryurl] | join(" "))"' "$RUNNER_TEMP/vulnerable.json"
+            echo "::error::$found vulnerable package(s)"; exit 1
+          fi
