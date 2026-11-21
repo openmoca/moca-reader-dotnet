@@ -84,6 +84,172 @@ public sealed class Library
     public StructureIndex Structure => _structure ??= new StructureIndex(this, _overlayFacts);
 
     /// <summary>
+    /// The structure operations for a host that hands their answers to a model (Reader contract §10, "Under a terms
+    /// request"; moca-spec ADR-0041): the merged structure of the loaded packages that are not closed for the request,
+    /// and the overlays. Labels, definitions and relations only a closed package states are absent, and
+    /// <see cref="StructureIndex.Nodes"/> returns records only from open packages (gate them too before handing them
+    /// on). A request with no <c>ai</c> part closes nothing, so it is <see cref="Structure"/>.
+    /// </summary>
+    /// <param name="terms">The host's terms request; null for none.</param>
+    /// <param name="termsLimits">The host's terms limits; null for none.</param>
+    public StructureIndex StructureFor(TermsRequest? terms, TermsLimits? termsLimits = null)
+    {
+        if (terms?.Ai is null)
+        {
+            return Structure;
+        }
+
+        var resolver = TermsResolver.For(this, termsLimits?.ToAi(), terms);
+        return new StructureIndex(this, _overlayFacts, [.. _packages.Where(p => !resolver.Closure(p.Result.Digest!).Closed)]);
+    }
+
+    /// <summary>
+    /// Whether a loaded package is closed, and hidden, for a terms request (Reader contract §15.4, "Closed and hidden"),
+    /// from its package-level resolved terms: the platform, the package, a composing package that speaks for it and the
+    /// host's limits. Null when no package with that digest is loaded.
+    /// </summary>
+    /// <param name="digest">The package digest.</param>
+    /// <param name="terms">The host's terms request.</param>
+    /// <param name="termsLimits">The host's terms limits; null for none.</param>
+    public PackageClosure? ClosureOf(string digest, TermsRequest terms, TermsLimits? termsLimits = null)
+    {
+        ArgumentNullException.ThrowIfNull(digest);
+        ArgumentNullException.ThrowIfNull(terms);
+        var resolver = TermsResolver.For(this, termsLimits?.ToAi(), terms);
+        return resolver.Knows(digest) ? resolver.Closure(digest) : null;
+    }
+
+    /// <summary>
+    /// What a model may be told about the loaded packages (Reader contract §15.4, "The catalogue rule"; moca-spec
+    /// ADR-0041), ordered by id then version in code-point order. A package has an entry only when one of its records,
+    /// or of its members' at any depth, passes the audience set and (unless <see cref="CatalogueOptions.IncludeAll"/>)
+    /// the default retrieval policy; when its own rating passes the request's rating gate; and when it is not hidden for
+    /// the request. There is no placeholder for a package left out.
+    /// </summary>
+    /// <param name="options">The terms request and the host's settings.</param>
+    public IReadOnlyList<CatalogueEntry> Catalogue(CatalogueOptions? options = null)
+    {
+        options ??= new CatalogueOptions();
+        var request = options.Terms;
+        var resolver = TermsResolver.For(this, options.TermsLimits?.ToAi(), request);
+        var index = Relations();
+        var now = Clock();
+        var audiences = options.Audiences?.ToList();
+        var own = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        bool PassesOwn(PackageResult result)
+        {
+            if (!own.TryGetValue(result.Digest!, out var passes))
+            {
+                passes = result.Nodes.Any(node => node.Representations.Any(rep =>
+                {
+                    var r = OpenMoca.Reader.Citations.Citations.For(result, node, rep, now, index);
+                    return (options.IncludeAll || OpenMoca.Reader.Citations.Citations.PassesDefaultPolicy(r))
+                        && Audience.Allowed(r, audiences, options.AllowUnlabelled);
+                }));
+                own[result.Digest!] = passes;
+            }
+
+            return passes;
+        }
+
+        // Contract §15.4, catalogue rule 1: its own records, or those of a member it composes, at any depth; each
+        // package walked once.
+        bool Passes(PackageResult result)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<PackageResult>([result]);
+            while (queue.Count > 0)
+            {
+                var r = queue.Dequeue();
+                if (!seen.Add(r.Digest!))
+                {
+                    continue;
+                }
+
+                if (PassesOwn(r))
+                {
+                    return true;
+                }
+
+                foreach (var m in r.Members)
+                {
+                    if (m is { Status: "resolved", Result: { Valid: true, Digest: not null } member })
+                    {
+                        queue.Enqueue(member);
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        var listed = new List<(PackageResult Result, PackageClosure Closure)>();
+        foreach (var result in _packages.Select(p => p.Result)
+                     .OrderBy(r => r.Id, StringComparer.Ordinal).ThenBy(r => r.Version, StringComparer.Ordinal))
+        {
+            if (!Passes(result))
+            {
+                continue;
+            }
+
+            // Catalogue rule 2: the package's own rating, never a node's, gated as a record with that rating would be.
+            if (request?.Rating is { } rating)
+            {
+                var declared = result.Terms?.Declared as System.Text.Json.Nodes.JsonObject;
+                var packageRating = declared is not null && declared.TryGetPropertyValue("rating", out var r) ? r ?? System.Text.Json.Nodes.JsonValue.Create(false) : null;
+                // The request has no ai part here, so the ai terms are not read.
+                if (TermsRules.GateReasons(new TermsRequest { Rating = rating }, TermsRules.ResolveAi(null, null, null, []), packageRating).Count > 0)
+                {
+                    continue;
+                }
+            }
+
+            // Catalogue rule 3: a hidden package has no entry.
+            var closure = resolver.Closure(result.Digest!);
+            if (!closure.Hidden)
+            {
+                listed.Add((result, closure));
+            }
+        }
+
+        var present = listed.Select(x => $"{x.Result.Id}@{x.Result.Version}").ToHashSet(StringComparer.Ordinal);
+        return [.. listed.Select(x => EntryOf(x.Result, x.Closure, present))];
+    }
+
+    /// <summary>Contract §15.4: a package's catalogue entry, open or closed.</summary>
+    private static CatalogueEntry EntryOf(PackageResult result, PackageClosure closure, HashSet<string> present)
+    {
+        var entry = new CatalogueEntry
+        {
+            Id = result.Id,
+            Version = result.Version,
+            Title = result.Title,
+            Publisher = result.Publisher?.Name,
+            Signed = result.Signers.Count > 0,
+        };
+        if (closure.Closed)
+        {
+            return entry with { ClosedBy = [.. closure.ClosedBy] };
+        }
+
+        IReadOnlyList<string>? members = null;
+        if (result.Manifest?["members"] is System.Text.Json.Nodes.JsonArray list && list.Count > 0)
+        {
+            members = [.. list.OfType<System.Text.Json.Nodes.JsonObject>()
+                .Where(m => present.Contains($"{JsonValues.StringOf(m["id"])}@{JsonValues.StringOf(m["version"])}"))
+                .Select(m => JsonValues.StringOf(m["id"])!)];
+        }
+
+        return entry with
+        {
+            Description = JsonValues.StringOf(result.Manifest?["description"]),
+            Tags = result.Tags is { } tags ? [.. tags] : null,
+            Members = members,
+        };
+    }
+
+    /// <summary>
     /// Adds a valid package, and its resolved members. A package already loaded (same id and version) is skipped.
     /// </summary>
     /// <exception cref="ArgumentException">The package is invalid or has no digest.</exception>
@@ -146,12 +312,16 @@ public sealed class Library
         PackageState.RelationIndexOf([.. _packages.Select(p => PackageState.From(p.Result))], _allowUnsignedRelations);
 
     /// <summary>Every node's citation record, one per node, in the requested locale.</summary>
-    public IReadOnlyList<CitationRecord> Citations(string? locale = null, bool includeText = false)
+    public IReadOnlyList<CitationRecord> Citations(string? locale = null, bool includeText = false) =>
+        Citations(locale, includeText, _packages);
+
+    /// <summary>The citation records of some of the loaded packages, with relations among every loaded package.</summary>
+    internal IReadOnlyList<CitationRecord> Citations(string? locale, bool includeText, IReadOnlyList<LoadedPackage> packages)
     {
         var index = Relations();
         var now = Clock();
         var records = new List<CitationRecord>();
-        foreach (var (result, _, _) in _packages)
+        foreach (var (result, _, _) in packages)
         {
             foreach (var node in result.Nodes)
             {

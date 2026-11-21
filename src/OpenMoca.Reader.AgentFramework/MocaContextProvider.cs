@@ -44,11 +44,22 @@ public sealed class MocaContextProvider : AIContextProvider
     private readonly IReadOnlyList<AITool> _tools;
 
     /// <summary>A provider over a search the host has set up: its backend, audiences and hooks.</summary>
+    /// <exception cref="ArgumentException">
+    /// <see cref="MocaContextOptions.Terms"/>, or <see cref="SearchOptions.Terms"/> on
+    /// <see cref="MocaContextOptions.Search"/>, has no <c>ai</c> part (Reader contract §15.4).
+    /// </exception>
     public MocaContextProvider(MocaSearch search, MocaContextOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
         _options = options ?? new MocaContextOptions();
+        ArgumentNullException.ThrowIfNull(_options.Terms, nameof(options));
+        MocaTools.Checked(_options.Terms, nameof(options));
+        if (_options.Search.Terms is { } turn)
+        {
+            MocaTools.Checked(turn, nameof(options));
+        }
+
         _tools = _options.Tools ? new MocaTools(search, _options.Terms).All() : [];
     }
 

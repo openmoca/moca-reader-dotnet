@@ -92,6 +92,23 @@ Records the terms do not allow are left out and counted in
 Without a terms request, terms change nothing. The Reader never reaches the network, or any
 file outside the package, because a package names it.
 
+Everything you hand to a model goes through the same gate, not only search
+results ([Reader contract §15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#154-the-terms-gate)):
+
+- `library.StructureFor(terms, termsLimits)` answers the structure operations
+  over the packages that are not closed for the request, so a closed
+  package's labels and definitions never reach the model.
+- `library.Catalogue(new CatalogueOptions { Terms = terms, ... })` says what
+  a model may be told about the packages. An open package gets its full
+  entry. A closed one gets only its id, version, title, publisher, whether it
+  is signed, and `ClosedBy`. A package whose creator set
+  `ai.allowed.mention: false` is hidden when closed: it has no entry at all.
+  Use the catalogue for any list of packages, and answer a lookup of a
+  package that has no entry exactly as for one that is not loaded.
+- Ingest takes the embedder's terms request (below).
+- `U004` carries `Excluded` (removed per reason) and `Hidden` (how many came
+  from hidden packages). Take `Hidden` out of any count you tell a model.
+
 `src/OpenMoca.Reader/Schemas/` holds byte-identical copies of moca-spec's
 `schemas/v1`, checked by the tests.
 
@@ -150,7 +167,10 @@ the tools hand the model
 ([Reader contract §15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#154-the-terms-gate)):
 by default as a third party's model with no conditions. Set
 `MocaContextOptions.Terms` (or pass a `TermsRequest` to `MocaTools`) when the
-model runs on the person's device or in your own service.
+model runs on the person's device or in your own service. The request always
+has an `ai` part: its destination (`device`, `host` or `provider`) is your
+setting, and a request without one is refused (`ArgumentException`). The
+`moca_structure` tool answers from `StructureFor`.
 
 ```csharp
 using OpenMoca.Reader.VectorData;
@@ -158,7 +178,10 @@ using OpenMoca.Reader.VectorData;
 // Any connector: CommunityToolkit.VectorData.InMemory, PgVector, Qdrant, SqliteVec, ...
 var collection = vectorStore.GetCollection<string, MocaStoreRecord<string>>(
     "moca", MocaStore.Definition<string>(embedder.Dimensions));
-var store = await new VectorStoreBackend<string>(collection, embedder).IngestAsync(library);
+// Embedding sends the text to a model: name where your embedder runs (here a third party's), and units the
+// creator closed to it are never embedded or stored.
+var store = await new VectorStoreBackend<string>(collection, embedder)
+    .IngestAsync(library, new IngestOptions { Terms = new AiRequest(TermsDestinations.Provider) });
 
 // Search without loading the packages: keep each loaded package's state (PackageState.From(result), plain JSON)
 // beside the store. Only those packages are returned, with supersession, contest, signatures and reviews
@@ -175,15 +198,18 @@ translate the filters, pass `filterPushdown: false`; the gate still applies
 them. Keys are strings or GUIDs made from each unit, so ingesting a package
 again replaces it, and `RemoveAsync(digest)` drops it.
 
-**Embedding does not apply the creator's terms yet.** `DenseBackend`,
-`EmbeddingGeneratorEmbedder` (`OpenMoca.Reader.Extensions.AI`) and
-`VectorStoreBackend` (`OpenMoca.Reader.VectorData`) pass each unit's text to
-your embedder whatever the package's terms say, and the Reader contract counts
-embedding as a use of the text
-([§15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#154-the-terms-gate)).
-If you embed with a third party's model, check the terms first: read
-`result.Terms` for each package and leave out what they do not allow. The
-terms gate for embedding comes in a 0.7.x release.
+**Ingest applies the creator's terms when you give it a terms request.**
+Embedding is a use of the text
+([Reader contract §9.4, §15.4](https://github.com/openmoca/moca-spec/blob/main/spec/moca-reader-contract.md#94-store-backends)).
+`VectorStoreBackend.IngestAsync` and `MemoryStoreBackend.IngestAsync` take
+`IngestOptions`: the embedder's destination (`device`, `host` or `provider`),
+the conditions it meets, and your terms limits. A unit the creator closed to
+that destination is never sent to the embedder or written to your store, and
+`IngestDiagnostics` reports `U004`. `VectorStoreBackend` also deletes any
+record an earlier ingest stored for it, so if you ingested before 0.7.0,
+ingest again with a request (or call `RemoveAsync` for the closed packages).
+Without a request, ingest takes every unit, as before. `DenseBackend` embeds
+only the person's query, never package text.
 
 ## Develop
 

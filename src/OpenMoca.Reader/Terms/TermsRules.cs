@@ -24,6 +24,7 @@ internal static partial class TermsRules
         new("allowed.provider", "provider", [true, false]),
         new("allowed.training", "training", [true, false]),
         new("allowed.machineTranslation", "machineTranslation", [true, false]),
+        new("allowed.mention", "mention", [true, false]),
         new("answerSources", null, ["model", "work"]),
     ];
 
@@ -35,8 +36,15 @@ internal static partial class TermsRules
         ["allowed.provider"] = 0,
         ["allowed.training"] = 1,
         ["allowed.machineTranslation"] = 0,
+        ["allowed.mention"] = 0,
         ["answerSources"] = 0,
     };
+
+    /// <summary>
+    /// Contract §15.3 (moca-spec ADR-0041): fields with no node level. In a <c>nodes</c> entry they are <c>U003</c> (the
+    /// terms schema does not list them there) and have no effect, even under a malformed entry.
+    /// </summary>
+    private static readonly HashSet<string> PackageOnly = new(StringComparer.Ordinal) { "allowed.mention" };
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal) { "noTraining", "noRetention" };
 
@@ -53,7 +61,7 @@ internal static partial class TermsRules
     {
         ["ai"] = new JsonObject
         {
-            ["allowed"] = new JsonObject { ["device"] = false, ["host"] = false, ["provider"] = false, ["training"] = false, ["machineTranslation"] = false },
+            ["allowed"] = new JsonObject { ["device"] = false, ["host"] = false, ["provider"] = false, ["training"] = false, ["machineTranslation"] = false, ["mention"] = false },
             ["answerSources"] = "work",
         },
         ["rights"] = new JsonObject { ["export"] = new JsonObject { ["allowed"] = false } },
@@ -199,7 +207,7 @@ internal static partial class TermsRules
         for (var i = 0; i < nodes.Count; i++)
         {
             var entryAi = Slot.Of(nodes[i], "ai");
-            foreach (var field in Fields)
+            foreach (var field in Fields.Where(f => !PackageOnly.Contains(f.Name)))
             {
                 var pkg = Rank(field, AiValue(packageAi, field));
                 var node = Rank(field, AiValue(entryAi, field));
@@ -381,12 +389,15 @@ internal static partial class TermsRules
     /// in this version lets a package loosen the platform defaults.
     /// </summary>
     /// <param name="terms">The package's declared terms.</param>
-    /// <param name="path">The node path under content/.</param>
+    /// <param name="path">
+    /// The node path under content/; null for the package-level terms, with no node level (contract §15.4, "Closed and
+    /// hidden").
+    /// </param>
     /// <param name="limits">The host's limits, shaped as <c>terms.ai</c>: floors, never values.</param>
     /// <param name="composites">The terms of composing packages whose signers speak for this package (step 3).</param>
-    public static CitationAiTerms ResolveAi(JsonNode? terms, string path, JsonObject? limits, IReadOnlyList<JsonNode?> composites)
+    public static CitationAiTerms ResolveAi(JsonNode? terms, string? path, JsonObject? limits, IReadOnlyList<JsonNode?> composites)
     {
-        var node = NodeEntry(terms, path).Entry;
+        var node = path is null ? null : NodeEntry(terms, path).Entry;
         var levels = new List<(Slot Ai, string Level)> { (Slot.Of(terms, "ai"), "package"), (Slot.Of(node, "ai"), "node") };
         levels.AddRange(composites.Select(c => (Slot.Of(c, "ai"), "composite")));
         if (limits is not null)
@@ -401,6 +412,12 @@ internal static partial class TermsRules
             var decidedBy = "platform";
             foreach (var (ai, level) in levels)
             {
+                // A package-level field has no node level (contract §15.3).
+                if (level == "node" && PackageOnly.Contains(field.Name))
+                {
+                    continue;
+                }
+
                 if (Rank(field, AiValue(ai, field)) is { } n && n >= value)
                 {
                     value = n;
@@ -435,7 +452,8 @@ internal static partial class TermsRules
         conditions.Sort(StringComparer.Ordinal);
         ResolvedTerm<bool> Bool(string name) => new(resolved[name].Rank == 0, resolved[name].DecidedBy);
         return new CitationAiTerms(
-            new CitationAllowedTerms(Bool("allowed.device"), Bool("allowed.host"), Bool("allowed.provider"), Bool("allowed.training"), Bool("allowed.machineTranslation")),
+            new CitationAllowedTerms(Bool("allowed.device"), Bool("allowed.host"), Bool("allowed.provider"), Bool("allowed.training"), Bool("allowed.machineTranslation"),
+                Bool("allowed.mention")),
             new ResolvedTerm<string>(resolved["answerSources"].Rank == 0 ? "model" : "work", resolved["answerSources"].DecidedBy),
             new ResolvedTerm<IReadOnlyList<string>>(conditions, conditionsBy));
     }
@@ -515,6 +533,41 @@ internal static partial class TermsRules
     }
 
     // ---- The gate (contract §15.4) ----
+
+    /// <summary>
+    /// Contract §15.4, "Closed and hidden" (moca-spec ADR-0041): whether a package is closed for a request's <c>ai</c>
+    /// part, from its package-level resolved terms (no node level), and whether it is hidden. A use never closes a
+    /// package; a request with no <c>ai</c> part closes and hides nothing.
+    /// </summary>
+    /// <param name="request">The terms request, or null for none.</param>
+    /// <param name="packageAi">The package-level resolved terms (<see cref="ResolveAi"/> with a null path).</param>
+    public static PackageClosure ClosureOf(TermsRequest? request, CitationAiTerms packageAi)
+    {
+        if (request?.Ai is not { } a)
+        {
+            return PackageClosure.Open;
+        }
+
+        var destination = Destinations.Contains(a.Destination) ? a.Destination : TermsDestinations.Provider;
+        var conditions = new HashSet<string>(a.Conditions ?? [], StringComparer.Ordinal);
+        var allowed = destination switch
+        {
+            TermsDestinations.Device => packageAi.Allowed.Device,
+            TermsDestinations.Host => packageAi.Allowed.Host,
+            _ => packageAi.Allowed.Provider,
+        };
+        string? closedBy = null;
+        if (!allowed.Value)
+        {
+            closedBy = $"ai.allowed.{destination}";
+        }
+        else if (destination == TermsDestinations.Provider && packageAi.ProviderRequires.Value.Any(c => !conditions.Contains(c)))
+        {
+            closedBy = "ai.providerRequires";
+        }
+
+        return closedBy is null ? PackageClosure.Open : new PackageClosure(true, [closedBy], !packageAi.Allowed.Mention.Value);
+    }
 
     /// <summary>The reasons the terms gate removes a record, or none.</summary>
     public static List<string> GateReasons(TermsRequest request, CitationAiTerms ai, JsonNode? rating)

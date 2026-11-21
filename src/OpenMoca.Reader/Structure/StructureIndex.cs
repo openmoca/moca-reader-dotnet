@@ -24,17 +24,26 @@ public sealed record ConceptDetails(
 }
 
 /// <summary>
-/// Structure operations over the merged structure of every loaded package plus the host's overlays
-/// (Reader contract §10). They are facts: every Reader answers them identically.
+/// Structure operations over the merged structure of the loaded packages plus the host's overlays (Reader contract §10).
+/// They are facts: every Reader answers them identically. Under a terms request
+/// (<see cref="Library.StructureFor"/>), the packages are those not closed for it.
 /// </summary>
 public sealed class StructureIndex
 {
     private readonly Library _library;
+    private readonly IReadOnlyList<LoadedPackage> _packages;
 
-    internal StructureIndex(Library library, IReadOnlyList<StructureFact> overlayFacts)
+    /// <param name="library">The library the packages are loaded in.</param>
+    /// <param name="overlayFacts">The host's overlays.</param>
+    /// <param name="packages">
+    /// The loaded packages whose structure is merged: every one, or, under a terms request, those not closed for it
+    /// (contract §10, "Under a terms request"). Null for every loaded package.
+    /// </param>
+    internal StructureIndex(Library library, IReadOnlyList<StructureFact> overlayFacts, IReadOnlyList<LoadedPackage>? packages = null)
     {
         _library = library;
-        var facts = library.Packages.SelectMany(p => p.Result.Structure?.Facts ?? []).Concat(overlayFacts);
+        _packages = packages ?? library.Packages;
+        var facts = _packages.SelectMany(p => p.Result.Structure?.Facts ?? []).Concat(overlayFacts);
         Graph = new StructureGraph(facts);
     }
 
@@ -220,10 +229,10 @@ public sealed class StructureIndex
         }
 
         // Package spec §5.6: a record is bound by its node's own concepts and by composition, as for search.
-        var composition = new CompositionIndex(_library.Packages
+        var composition = new CompositionIndex(_packages
             .Where(p => p.Result.Digest is not null)
             .Select(p => (p.Result.Digest!, Composition.Of(p.Result))));
-        return _library.Citations(locale, includeText: true)
+        return _library.Citations(locale, includeText: true, _packages)
             .Where(r => composition.BoundTo(r, wanted))
             .Where(r => includeAll || Citations.Citations.PassesDefaultPolicy(r))
             .OrderBy(r => r.Node.Ref, StringComparer.Ordinal)

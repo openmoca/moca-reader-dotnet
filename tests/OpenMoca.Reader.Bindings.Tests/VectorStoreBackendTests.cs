@@ -1,4 +1,5 @@
 using CommunityToolkit.VectorData.InMemory;
+using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Extensions.AI;
 using OpenMoca.Reader.Search;
 using OpenMoca.Reader.Sidecars;
@@ -110,6 +111,38 @@ public sealed class VectorStoreBackendTests
 
         Assert.All(generator.Inputs.SkipLast(1), i => Assert.StartsWith("passage: ", i, StringComparison.Ordinal));
         Assert.Equal("query: refund", generator.Inputs[^1]);
+    }
+
+    [Fact]
+    public async Task Ingest_ForAProvider_SendsNoClosedText_StoresNone_AndClearsWhatAnEarlierIngestStored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = new Library();
+        foreach (var name in new[] { "open", "closed-named", "closed-hidden" })
+        {
+            library.Add(await MocaReader.ReadPackageAsync(Path.Combine(MocaSpec.Conformance, "fixtures", "terms", "mention", name), cancellationToken: ct));
+        }
+
+        var states = library.Packages.Select(p => PackageState.From(p.Result)).ToList();
+        var generator = new HashingGenerator();
+        var store = new VectorStoreBackend<string>(Collection<string>(), new EmbeddingGeneratorEmbedder(generator));
+        var all = new SearchOptions { Limit = 50, IncludeAll = true };
+
+        await store.IngestAsync(library, ct);
+        var before = await new MocaSearch(states, library.Clock, store).SearchAsync("lantern", all, ct);
+        generator.Inputs.Clear();
+        await store.IngestAsync(library, IngestOptions.Provider, ct);
+        var embedded = generator.Inputs.ToList();
+        var after = await new MocaSearch(states, library.Clock, store).SearchAsync("lantern", all, ct);
+
+        Assert.Equal(3, before.Select(r => r.Package.Id).Distinct().Count());
+        Assert.Equal(["https://example.com/conformance/terms-mention-open"], after.Select(r => r.Package.Id).Distinct());
+        // Only the open package's one unit went to the embedder: never the hidden package's second episode.
+        Assert.Single(embedded);
+        Assert.DoesNotContain(embedded, i => i.Contains("Episode 2", StringComparison.Ordinal));
+        var u004 = Assert.Single(store.IngestDiagnostics);
+        Assert.Equal(DiagnosticCodes.U004TermsExcluded, u004.Code);
+        Assert.True(u004.Hidden > 0);
     }
 
     [Fact]

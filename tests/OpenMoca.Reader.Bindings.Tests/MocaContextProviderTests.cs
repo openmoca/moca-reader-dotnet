@@ -184,6 +184,48 @@ public sealed class MocaContextProviderTests
         }
     }
 
+    [Fact]
+    public async Task ATermsRequestWithNoAiPart_IsAlwaysRefused_TheDestinationIsTheSetting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (search, _) = await SupportKb(ct);
+        var ratingOnly = new TermsRequest { Rating = new RatingRequest { AllowUnrated = true } };
+
+        Assert.Throws<ArgumentException>(() => new MocaTools(search, ratingOnly));
+        Assert.Throws<ArgumentException>(() => new MocaContextProvider(search, new MocaContextOptions { Terms = ratingOnly }));
+        Assert.Throws<ArgumentException>(() => new MocaContextProvider(search, new MocaContextOptions { Search = new SearchOptions { Terms = new TermsRequest() } }));
+        // Naming the destination is how a host chooses; a rating filter rides beside it.
+        var onDevice = ratingOnly with { Ai = new AiRequest(TermsDestinations.Device) };
+        Assert.NotEmpty(new MocaTools(search, onDevice).All());
+        _ = new MocaContextProvider(search, new MocaContextOptions { Terms = onDevice });
+    }
+
+    /// <summary>Contract §10 and §15.4: the structure tool answers only from packages not closed for the request.</summary>
+    [Fact]
+    public async Task StructureTool_LeavesOutLabelsAndDefinitionsOfAClosedPackage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = new Library();
+        foreach (var name in new[] { "open", "closed" })
+        {
+            library.Add(await MocaReader.ReadPackageAsync(Path.Combine(MocaSpec.Conformance, "fixtures", "terms", "structure", name), cancellationToken: ct));
+        }
+
+        var search = new MocaSearch(library, new LexicalBackend(library));
+        var provider = (AIFunction)new MocaTools(search).All().Single(t => t.Name == "moca_structure");
+        var device = (AIFunction)new MocaTools(search, new TermsRequest { Ai = new AiRequest(TermsDestinations.Device) }).All().Single(t => t.Name == "moca_structure");
+        var topic = new AIFunctionArguments { ["op"] = "concept", ["iri"] = "https://example.org/conformance/terms-structure#Topic" };
+        var closed = new AIFunctionArguments { ["op"] = "concept", ["iri"] = "https://example.org/conformance/terms-structure#Closed" };
+
+        var forProvider = (await Invoke(provider, topic, ct)).ToJsonString();
+        var forDevice = (await Invoke(device, topic, ct)).ToJsonString();
+
+        Assert.DoesNotContain("Text a provider may not receive.", forProvider, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ports", forProvider, StringComparison.Ordinal);
+        Assert.Contains("Text a provider may not receive.", forDevice, StringComparison.Ordinal);
+        Assert.Null((await Invoke(provider, closed, ct))["result"]);
+    }
+
     private static async Task<(MocaSearch Search, Library Library)> SupportKb(CancellationToken ct)
     {
         var library = new Library().Add(await MocaReader.ReadPackageAsync(Path.Combine(MocaSpec.Examples, "support-kb"), cancellationToken: ct));

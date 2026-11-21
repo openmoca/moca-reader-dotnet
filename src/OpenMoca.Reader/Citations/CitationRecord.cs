@@ -305,7 +305,7 @@ public sealed record CitationTerms(
     [property: JsonPropertyName("rights")] CitationRightsTerms? Rights);
 
 /// <summary>Resolved <c>terms.ai</c>.</summary>
-/// <param name="Allowed">The five permissions.</param>
+/// <param name="Allowed">The six permissions.</param>
 /// <param name="AnswerSources"><c>model</c> or <c>work</c>.</param>
 /// <param name="ProviderRequires">The conditions a provider must meet, sorted. An unknown or malformed one is kept, so no host can meet it.</param>
 public sealed record CitationAiTerms(
@@ -319,12 +319,16 @@ public sealed record CitationAiTerms(
 /// <param name="Provider">AI use with a third party's model.</param>
 /// <param name="Training">Training a model on the work.</param>
 /// <param name="MachineTranslation">Translating the work by machine.</param>
+/// <param name="Mention">
+/// Whether a model that may not receive the work may be told it exists (package level only; moca-spec ADR-0041).
+/// </param>
 public sealed record CitationAllowedTerms(
     [property: JsonPropertyName("device")] ResolvedTerm<bool> Device,
     [property: JsonPropertyName("host")] ResolvedTerm<bool> Host,
     [property: JsonPropertyName("provider")] ResolvedTerm<bool> Provider,
     [property: JsonPropertyName("training")] ResolvedTerm<bool> Training,
-    [property: JsonPropertyName("machineTranslation")] ResolvedTerm<bool> MachineTranslation);
+    [property: JsonPropertyName("machineTranslation")] ResolvedTerm<bool> MachineTranslation,
+    [property: JsonPropertyName("mention")] ResolvedTerm<bool> Mention);
 
 /// <summary>Resolved rights permissions (Reader contract §15.3).</summary>
 /// <param name="Export">Whether an app may let people copy, save or export the work's text. Removes nothing from a search.</param>

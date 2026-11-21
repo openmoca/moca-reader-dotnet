@@ -72,21 +72,52 @@ public sealed class VectorStoreBackend<TKey> : ISearchBackend
     /// <inheritdoc/>
     public IReadOnlyList<Diagnostic> Diagnostics { get; private set; } = [];
 
+    /// <summary>The findings of the latest ingest: U004 when its terms request left units out (Reader contract §9.4).</summary>
+    public IReadOnlyList<Diagnostic> IngestDiagnostics { get; private set; } = [];
+
     /// <summary>
-    /// Ingests every node representation (or sidecar chunk) of every loaded package. Keys come from each unit's
-    /// digest, node, locale and span, so ingesting a package again replaces its records.
+    /// Ingests every node representation (or sidecar chunk) of every loaded package, with no terms request. Keys come
+    /// from each unit's digest, node, locale and span, so ingesting a package again replaces its records. A host whose
+    /// embedder is not on the person's device passes its terms request instead
+    /// (<see cref="IngestAsync(Library, IngestOptions, CancellationToken)"/>).
     /// </summary>
-    public async Task<VectorStoreBackend<TKey>> IngestAsync(Library library, CancellationToken cancellationToken = default)
+    public Task<VectorStoreBackend<TKey>> IngestAsync(Library library, CancellationToken cancellationToken = default) =>
+        IngestAsync(library, new IngestOptions(), cancellationToken);
+
+    /// <summary>
+    /// Ingests the units of every loaded package that pass the ingest's terms request (Reader contract §9.4, moca-spec
+    /// ADR-0041). A unit the gate removes for the embedder's destination is never sent to the embedder or written to
+    /// the store, and any record an earlier ingest stored for it is deleted, so ingesting again with a request also
+    /// clears closed text an ingest without one stored. <see cref="IngestDiagnostics"/> reports U004. Keys come from
+    /// each unit's digest, node, locale and span, so ingesting a package again replaces its records.
+    /// </summary>
+    /// <param name="library">The packages to ingest.</param>
+    /// <param name="options">The embedder's terms request and the host's limits; with no request, every unit.</param>
+    /// <param name="cancellationToken">Cancels the ingest.</param>
+    public async Task<VectorStoreBackend<TKey>> IngestAsync(Library library, IngestOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(library);
+        ArgumentNullException.ThrowIfNull(options);
         await _collection.EnsureCollectionExistsAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var batch in StoreUnit.From(library).Chunk(_batchSize))
+        var units = StoreUnit.From(library, options, out var findings);
+        if (options.Terms is not null)
+        {
+            var kept = units.Select(u => Identity(u.Hit)).ToHashSet(StringComparer.Ordinal);
+            var removed = StoreUnit.From(library).Select(u => Identity(u.Hit)).Where(id => !kept.Contains(id)).Select(_key).ToList();
+            foreach (var batch in removed.Chunk(DeleteBatch))
+            {
+                await _collection.DeleteAsync(batch, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var batch in units.Chunk(_batchSize))
         {
             var vectors = await _embedder.EmbedAsync([.. batch.Select(u => u.Text)], EmbeddingRole.Document, cancellationToken).ConfigureAwait(false);
             var records = batch.Select((u, i) => ToRecord(u, vectors[i])).ToList();
             await _collection.UpsertAsync(records, cancellationToken).ConfigureAwait(false);
         }
 
+        IngestDiagnostics = findings;
         return this;
     }
 

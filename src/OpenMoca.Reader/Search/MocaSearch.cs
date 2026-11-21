@@ -156,6 +156,8 @@ public sealed class MocaSearch
         }
 
         var (fetch, filters) = Plan(request, caller, now, index, loaded, composition);
+        // Contract §15.3–15.4: each node's resolved terms, and which packages are closed or hidden for the request.
+        var resolver = caller.Terms is { } termsRequest ? ResolverFor(termsRequest, composition) : null;
         // Contract §9.2, "Filters come before the limit": ask again, for more each time, until limit records pass the
         // gate or the backend has no more.
         for (var size = fetch; ; size = Next(size))
@@ -169,8 +171,8 @@ public sealed class MocaSearch
             }
 
             // Counted afresh each round: the last round's count is the one reported.
-            var excluded = caller.Terms is not null ? new SortedDictionary<string, int>(StringComparer.Ordinal) : null;
-            var passed = Gate(candidates, caller, loaded, composition, excluded);
+            var excluded = caller.Terms is not null ? new TermsCount() : null;
+            var passed = Gate(candidates, caller, loaded, composition, resolver, excluded);
             var done = passed.Count >= caller.Limit || hits.Count < size;
             var truncated = !done && _maxCandidates is { } max && size >= max;
             if (done || truncated)
@@ -180,12 +182,8 @@ public sealed class MocaSearch
                     findings.Add(DiagnosticCodes.S010SearchTruncated, $"stopped at maxCandidates {_maxCandidates} with {passed.Count} of {caller.Limit} records");
                 }
 
-                // Contract §15.4: the records the terms gate removed, counted by reason.
-                if (excluded is { Count: > 0 })
-                {
-                    findings.Add(DiagnosticCodes.U004TermsExcluded,
-                        $"the terms request removed records ({string.Join(", ", excluded.Select(kv => $"{kv.Key}: {kv.Value}"))})");
-                }
+                // Contract §15.4: the records the terms gate removed, by reason, and how many were from hidden packages.
+                excluded?.Report(findings, "records");
 
                 Diagnostics = findings.Items;
                 return truncated ? passed : passed.Take(caller.Limit).ToList();
@@ -198,7 +196,8 @@ public sealed class MocaSearch
     /// nodes bound to a concept, when they are about to be handed to a model or shown under a rating filter. Returns the
     /// records the creator's terms allow, each with its resolved terms, resolved as a search resolves them (the host's
     /// <see cref="TermsLimits"/>, and composing packages). Records whose package is not loaded are left out. The
-    /// records removed are counted in <see cref="Diagnostics"/> (U004).
+    /// records removed are counted in <see cref="Diagnostics"/> (U004, with its <c>excluded</c> and <c>hidden</c>
+    /// counts), and a record kept names no package hidden for the request in <c>supersededBy</c> or <c>contestedBy</c>.
     /// </summary>
     /// <param name="records">Citation records from this search's library or packages.</param>
     /// <param name="request">The host's terms request.</param>
@@ -209,26 +208,27 @@ public sealed class MocaSearch
         var loaded = Loaded();
         var composition = CompositionOf(loaded);
         var allowed = _library is not null ? loaded.Keys.ToHashSet(StringComparer.Ordinal) : _allowed!;
-        var excluded = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var resolver = ResolverFor(request, composition);
+        var excluded = new TermsCount();
         var kept = new List<CitationRecord>();
         foreach (var record in records)
         {
-            if (allowed.Contains(record.Package.Digest) && WithTerms(record, request, loaded, composition, excluded) is { } termed)
+            if (allowed.Contains(record.Package.Digest) && WithTerms(record, request, resolver, excluded) is { } termed)
             {
                 kept.Add(termed);
             }
         }
 
         var findings = new DiagnosticBag();
-        if (excluded.Count > 0)
-        {
-            findings.Add(DiagnosticCodes.U004TermsExcluded,
-                $"the terms request removed records ({string.Join(", ", excluded.Select(kv => $"{kv.Key}: {kv.Value}"))})");
-        }
-
+        excluded.Report(findings, "records");
         Diagnostics = findings.Items;
         return kept;
     }
+
+    private TermsResolver ResolverFor(TermsRequest request, CompositionIndex composition) =>
+        _library is not null
+            ? TermsResolver.For(_library, _termsLimits, request)
+            : TermsResolver.For(_states!.Values, composition, _allowUnsigned, _termsLimits, request);
 
     private Dictionary<string, PackageResult> Loaded() =>
         (_library?.Packages ?? []).ToDictionary(p => p.Result.Digest!, p => p.Result, StringComparer.Ordinal);
@@ -473,7 +473,7 @@ public sealed class MocaSearch
     /// best first; the caller keeps the limit.
     /// </summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
-        CompositionIndex composition, SortedDictionary<string, int>? excluded)
+        CompositionIndex composition, TermsResolver? resolver, TermsCount? excluded)
     {
         var concepts = ConceptsFor(caller);
         var wanted = concepts is null ? null : concepts.ToHashSet(StringComparer.Ordinal);
@@ -526,7 +526,7 @@ public sealed class MocaSearch
             var kept = record with { Terms = null };
             if (caller.Terms is { } request)
             {
-                if (WithTerms(record, request, loaded, composition, excluded!) is not { } termed)
+                if (WithTerms(record, request, resolver!, excluded!) is not { } termed)
                 {
                     continue;
                 }
@@ -549,52 +549,23 @@ public sealed class MocaSearch
 
     /// <summary>
     /// Contract §15.3–15.4: the record with its resolved terms, or null when the terms gate removes it (counted by
-    /// reason). A package with no terms result has every field at its strictest.
+    /// reason, and as hidden when its package is hidden for the request). A package with no terms result has every field
+    /// at its strictest. A record that passes names no hidden package in supersededBy or contestedBy (§15.4, "Nothing
+    /// names a hidden package").
     /// </summary>
-    private CitationRecord? WithTerms(CitationRecord record, TermsRequest request, Dictionary<string, PackageResult> loaded,
-        CompositionIndex composition, SortedDictionary<string, int> excluded)
+    private static CitationRecord? WithTerms(CitationRecord record, TermsRequest request, TermsResolver resolver, TermsCount excluded)
     {
-        (JsonNode? Terms, string Authority)? SourceOf(string digest)
-        {
-            if (_library is not null)
-            {
-                return loaded.GetValueOrDefault(digest)?.Terms is { } t ? (t.Declared, t.Authority) : null;
-            }
-
-            return _states!.GetValueOrDefault(digest)?.Terms is { } s ? (s.Terms, s.Authority) : null;
-        }
-
-        // Contract §15.3 step 3: a composing package's terms apply only when its signers speak for the member, as for
-        // upTo (§9), or the host allows unsigned packages to. A composer with no terms result counts as setting nothing.
-        var composites = new List<JsonNode?>();
-        foreach (var composer in composition.ComposersOf(record.Package.Digest))
-        {
-            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded), record.Package.Id))
-            {
-                continue;
-            }
-
-            if (SourceOf(composer.Digest) is { Terms: { } c })
-            {
-                composites.Add(c);
-            }
-        }
-
-        var (terms, authority) = SourceOf(record.Package.Digest) ?? (TermsRules.Strictest, TermsAuthority.Unverified);
-        var ai = TermsRules.ResolveAi(terms, record.Node.Path, _termsLimits, composites);
-        var rating = TermsRules.RatingOf(terms, record.Node.Path);
+        var digest = record.Package.Digest;
+        var (ai, rating, composites) = resolver.NodeTerms(digest, record.Node.Path);
         var reasons = TermsRules.GateReasons(request, ai, rating);
         if (reasons.Count > 0)
         {
-            foreach (var reason in reasons)
-            {
-                excluded[reason] = excluded.GetValueOrDefault(reason) + 1;
-            }
-
+            excluded.Add(reasons, resolver.Closure(digest).Hidden);
             return null;
         }
 
-        return record with { Terms = TermsRules.RecordTerms(authority, ai, rating, TermsRules.ResolveExport(terms, composites)) };
+        var (terms, authority) = resolver.TermsOf(digest);
+        return resolver.WithoutHidden(record with { Terms = TermsRules.RecordTerms(authority, ai, rating, TermsRules.ResolveExport(terms, composites)) });
     }
 
     private static bool LocaleOk(CitationRecord record, string locale, Dictionary<string, PackageResult> loaded)

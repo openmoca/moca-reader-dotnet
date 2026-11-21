@@ -48,6 +48,7 @@ public sealed class ConformanceCorpusTests
         var problems = JsonValues.StringOf(c["kind"]) switch
         {
             "search" => CheckSearch(expect, actual),
+            "catalogue" => CheckCatalogue(expect, actual),
             "structure" or "map-time" => CheckStructure(expect, actual),
             _ => CheckPackage(expect, actual),
         };
@@ -149,6 +150,53 @@ public sealed class ConformanceCorpusTests
             }
         }
 
+        // Record fields by node ref: each listed field (a dotted path) compared as a JSON value; null means absent.
+        foreach (var (k, fields) in e["fields"] as JsonObject ?? [])
+        {
+            var got = records.Where(r => JsonValues.StringOf(r["node"]!["ref"]) == k).ToList();
+            if (got.Count == 0)
+            {
+                problems.Add($"{k}: expected a result to compare fields with");
+            }
+
+            foreach (var r in got)
+            {
+                foreach (var (path, want) in fields as JsonObject ?? [])
+                {
+                    JsonNode? value = r;
+                    foreach (var part in path.Split('.'))
+                    {
+                        value = value is JsonObject o ? o[part] : null;
+                    }
+
+                    if (Canonical(value) != Canonical(want))
+                    {
+                        problems.Add($"{k}: expected {path} {Canonical(want)}, got {Canonical(value)}");
+                    }
+                }
+            }
+        }
+
+        // Contract §15.4: the counts of the search's U004, each member the case gives compared exactly; null means no U004.
+        if (e.TryGetPropertyValue("termsExcluded", out var termsExcluded))
+        {
+            var got = actual["termsExcluded"];
+            if ((termsExcluded is null) != (got is null))
+            {
+                problems.Add($"termsExcluded: expected {Canonical(termsExcluded)}, got {Canonical(got)}");
+            }
+            else if (termsExcluded is JsonObject want)
+            {
+                foreach (var (k, v) in want)
+                {
+                    if (Canonical(got![k]) != Canonical(v))
+                    {
+                        problems.Add($"termsExcluded.{k}: expected {Canonical(v)}, got {Canonical(got[k])}");
+                    }
+                }
+            }
+        }
+
         foreach (var r in records)
         {
             var errors = MocaSchemas.Validate(MocaSchemas.CitationRecord, r);
@@ -179,6 +227,45 @@ public sealed class ConformanceCorpusTests
         }
 
         return problems;
+    }
+
+    /// <summary>Contract §15.4, "The catalogue rule": entries compared exactly, in order, each valid against its schema.</summary>
+    private static List<string> CheckCatalogue(JsonObject e, JsonObject actual)
+    {
+        var problems = new List<string>();
+        CompareSets("codes", e["codes"] ?? new JsonArray(), actual["codes"], problems);
+        var result = actual["result"] as JsonArray ?? [];
+        if (Canonical(e["result"]) != Canonical(result))
+        {
+            problems.Add($"result: expected {Canonical(e["result"])}, got {Canonical(result)}");
+        }
+
+        foreach (var entry in result)
+        {
+            var errors = MocaSchemas.Validate(MocaSchemas.CatalogueEntry, entry);
+            if (errors.Count > 0)
+            {
+                problems.Add($"{entry?["id"]} is not a valid catalogue entry: {errors[0]}");
+            }
+        }
+
+        return problems;
+    }
+
+    /// <summary>A JSON value as text with every object's keys sorted, as the runner's canonical form; null for absent.</summary>
+    private static string Canonical(JsonNode? value)
+    {
+        static JsonNode? Sort(JsonNode? n) => n switch
+        {
+            JsonObject o => new JsonObject(o.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => KeyValuePair.Create(kv.Key, Sort(kv.Value)))),
+            JsonArray a => new JsonArray([.. a.Select(Sort)]),
+            null => null,
+            // Numbers as doubles, as JavaScript reads them, so 1e19 and 10000000000000000000 agree.
+            JsonValue v when v.GetValueKind() == System.Text.Json.JsonValueKind.Number => JsonValue.Create(double.Parse(v.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture)),
+            _ => JsonNode.Parse(n.ToJsonString()),
+        };
+
+        return Sort(value)?.ToJsonString(JsonValues.CompactJson) ?? "null";
     }
 
     private static void CompareSets(string name, JsonNode? expected, JsonNode? actual, List<string> problems)
