@@ -26,14 +26,19 @@ For moca-spec's hardening pass before 0.7.0; each rule has corpus cases there an
   match it, all checked before any entry is read (`T003`); declared sizes are summed before anything is inflated. An
   entry is read only with method 0 or 8 and no encryption flag, and must give exactly its declared length and CRC-32
   (`P002`). An archive too large to hold in memory is `T003`.
-- **Parsing depth**: YAML front matter nested deeper than 64 levels is `C002`; a `structure.ttl` nested deeper than
-  256 brackets is `O001`, checked in one pass before the Turtle parser runs.
+- **Nesting** (contract §3): JSON and YAML front matter nest at most 64 levels, the outermost object, array or mapping
+  being level 1, fixed rather than left to a parser's default. Deeper text is refused as it is read, without
+  recursion, with the code its kind of file has for text that does not parse: `M001` for `moca.json`, `C002` for a
+  node's front matter (`C004` for a reserved file), `A001` for an attestation file or its statement, `E005` for
+  `moca-enc.json`, `S001` for a sidecar's `index.json` and `S004` for a payload line. A `structure.ttl` nested deeper
+  than 256 brackets is `O001`, checked in one pass before the Turtle parser runs.
 - **A read never throws for what a package holds**: a JSON string with an unpaired surrogate escape is invalid JSON
   (I-JSON, RFC 7493): `M001`, `A001`, `E005` or `S001` by file; an unreadable envelope entry is `P002` and an unreadable
   sidecar entry `S001`; image paths are normalised safely. Anything else unexpected becomes one `P002` and an invalid
   result; only cancellation and programmer errors throw.
 - **Text work is linear**: links, HTML tags and quotes in node bodies and evidence sources are scanned in one pass
-  (with a Knuth-Morris-Pratt quote search), giving the same results as before. A link target in angle brackets loses
+  (with a Knuth-Morris-Pratt quote search), giving the same results as before; a link's target is copied only once
+  the link is known to close. The tests count the scanners' steps and bytes, not time. A link target in angle brackets loses
   them, as in the reference Reader.
 - **Directory sources** read regular files only: a named pipe, device or socket is `P001`, and an entry that reports
   no bytes is never opened.
