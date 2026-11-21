@@ -320,6 +320,15 @@ public static partial class MocaReader
                     diagnostics.Add(tampered ? DiagnosticCodes.A008PackageDigestMismatch : DiagnosticCodes.A002AttestationInvalid,
                         $"package attestation does not match this package: {mismatch}", file);
                 }
+                else if (sig.Scoped && !TrustRoot.ScopeCovers(sig.Ids, result.Id))
+                {
+                    // Attestations §6 (moca-spec ADR-0040): a signer with ids signs only the packages those ids cover. The
+                    // signature is good, but this signer may not speak for this id, so the package is not signed by it.
+                    record.Outcome = "invalid";
+                    record.Reason = $"the signer's ids in the trust root do not cover {result.Id}";
+                    diagnostics.Add(DiagnosticCodes.A010SignerNotForPackage,
+                        $"package attestation is signed by {signer}, whose ids in the trust root do not cover {result.Id}", file);
+                }
                 else
                 {
                     result.Signers.Add(signer!);
@@ -430,8 +439,13 @@ public static partial class MocaReader
             case "invalid":
                 diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: {sig.Reason}", file);
                 return null;
-            default:
+            case "valid":
                 return sig;
+            default:
+                // Only "valid" counts: any other outcome, from any verifier, is a signature that did not verify.
+                record.Outcome = "invalid";
+                diagnostics.Add(DiagnosticCodes.A002AttestationInvalid, $"{role} attestation signature did not verify: outcome {sig.Outcome}", file);
+                return null;
         }
     }
 

@@ -111,6 +111,8 @@ public static class DiagnosticCodes
     public const string A008PackageDigestMismatch = "A008_PACKAGE_DIGEST_MISMATCH";
     /// <summary>The host requires a valid package attestation and the package has none.</summary>
     public const string A009SignatureRequired = "A009_SIGNATURE_REQUIRED";
+    /// <summary>A package attestation verifies, but its signer has <c>ids</c> in the trust root that do not cover this package id.</summary>
+    public const string A010SignerNotForPackage = "A010_SIGNER_NOT_FOR_PACKAGE";
 
     // Members
     /// <summary>A member could not be resolved by the host resolver.</summary>
@@ -214,6 +216,7 @@ public static class DiagnosticCodes
         [A007ReviewDateFuture] = DiagnosticSeverity.Warning,
         [A008PackageDigestMismatch] = DiagnosticSeverity.Error,
         [A009SignatureRequired] = DiagnosticSeverity.Error,
+        [A010SignerNotForPackage] = DiagnosticSeverity.Error,
         [R001MemberUnresolved] = DiagnosticSeverity.Warning,
         [R002MemberDigestMismatch] = DiagnosticSeverity.Error,
         [R003MemberCycle] = DiagnosticSeverity.Error,
