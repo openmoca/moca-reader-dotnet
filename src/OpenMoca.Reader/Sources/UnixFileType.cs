@@ -16,7 +16,28 @@ internal static partial class UnixFileType
     private const int Directory = 0x4000;
     private const int Link = 0xA000;
 
-    private static bool _unavailable = OperatingSystem.IsWindows();
+    // The shim's struct is the runtime's own, not a public API: it is trusted only after it reads a known directory and a
+    // known regular file correctly, so a layout this code does not expect can never make a regular file look special.
+    private static bool _unavailable = OperatingSystem.IsWindows() || !SelfTest();
+
+    private static bool SelfTest()
+    {
+        try
+        {
+            var file = typeof(object).Assembly.Location;
+            return file.Length > 0 && TypeOf(AppContext.BaseDirectory) == Directory && TypeOf(file) == Regular;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or MarshalDirectiveException or BadImageFormatException)
+        {
+            return false;
+        }
+    }
+
+    private static int? TypeOf(string path)
+    {
+        var status = new byte[512];
+        return LStat(path.TrimEnd('/'), status) == 0 ? BitConverter.ToInt32(status, 4) & TypeMask : null;
+    }
 
     // The runtime's FileStatus: Flags (int32), then Mode (int32). The buffer is larger than the struct.
     [DllImport("libSystem.Native", EntryPoint = "SystemNative_LStat")]
@@ -32,14 +53,7 @@ internal static partial class UnixFileType
 
         try
         {
-            var status = new byte[512];
-            if (LStat(path, status) != 0)
-            {
-                return false;
-            }
-
-            var type = BitConverter.ToInt32(status, 4) & TypeMask;
-            return type is not (Regular or Directory or Link);
+            return TypeOf(path) is { } type && type is not (Regular or Directory or Link);
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or MarshalDirectiveException)
         {
