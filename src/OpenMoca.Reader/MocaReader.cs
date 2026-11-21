@@ -157,8 +157,27 @@ public static partial class MocaReader
                 result.DatePublished = datePublished;
             }
 
+            if (manifest["datePackaged"] is JsonValue packaged && packaged.TryGetValue<string>(out var datePackaged))
+            {
+                result.DatePackaged = datePackaged;
+            }
+
             // Package spec §4.6–4.8: held aside, and exposed by Finish only when the package is valid.
             result.PendingCatalogue = CatalogueChecks.Check(manifest, bytes, diagnostics, options.Limits);
+
+            // Package spec §4.14: terms are checked inside; a problem is a warning, never M002.
+            var termsProblems = manifest.TryGetPropertyValue("terms", out var declaredTerms) ? TermsRules.Check(declaredTerms) : [];
+            foreach (var (problem, message) in termsProblems)
+            {
+                diagnostics.Add(problem.Code, message, PackageDigest.ManifestFile);
+            }
+
+            foreach (var message in TermsRules.Loosened(declaredTerms))
+            {
+                diagnostics.Add(DiagnosticCodes.U002TermsLoosened, message, PackageDigest.ManifestFile);
+            }
+
+            result.PendingTermsProblems = [.. termsProblems.Select(p => p.Problem)];
         }
         result.Profiles = (manifest["profiles"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? [];
         // Package spec §14: M008 only for a declared mocaVersion below 0.4; M009 for one newer than this Reader's.
@@ -221,6 +240,12 @@ public static partial class MocaReader
         }
 
         CheckRelationAuthority(result, diagnostics);
+        // Contract §15.1–15.2: the terms as written, their problems, and who stated them.
+        if (result.PendingTermsProblems is { } problems)
+        {
+            result.Terms = new PackageTerms(manifest["terms"]?.DeepClone(), problems, TermsRules.AuthorityOf(result.Signers));
+        }
+
         await ResolveMembersAsync(result, members, options, stack, budget, diagnostics, cancellationToken).ConfigureAwait(false);
         return Finish(result, diagnostics);
     }

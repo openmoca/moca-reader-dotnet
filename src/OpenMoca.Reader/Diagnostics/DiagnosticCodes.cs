@@ -167,6 +167,16 @@ public static class DiagnosticCodes
     /// <summary>A search stopped at a bound the host set before limit records passed the gate (contract §9.2).</summary>
     public const string S010SearchTruncated = "S010_SEARCH_TRUNCATED";
 
+    // Creators' terms (contract §15)
+    /// <summary>A field of terms is malformed. The package stays valid; the field counts as its strictest value when terms are applied.</summary>
+    public const string U001TermsInvalid = "U001_TERMS_INVALID";
+    /// <summary>A terms.nodes entry, or a composing package, is looser than the package for a permission; the stricter value stands.</summary>
+    public const string U002TermsLoosened = "U002_TERMS_LOOSENED";
+    /// <summary>A terms field has a value this version does not know. It is exposed, and counts as its strictest value when terms are applied.</summary>
+    public const string U003TermsUnknownValue = "U003_TERMS_UNKNOWN_VALUE";
+    /// <summary>A search's terms request removed records; the finding counts them by reason.</summary>
+    public const string U004TermsExcluded = "U004_TERMS_EXCLUDED";
+
     private static readonly Dictionary<string, DiagnosticSeverity> Severities = new()
     {
         [T001TargetNotFound] = DiagnosticSeverity.Error,
@@ -236,6 +246,10 @@ public static class DiagnosticCodes
         [S008UpToUnresolved] = DiagnosticSeverity.Warning,
         [S009SidecarItemsReplaced] = DiagnosticSeverity.Info,
         [S010SearchTruncated] = DiagnosticSeverity.Warning,
+        [U001TermsInvalid] = DiagnosticSeverity.Warning,
+        [U002TermsLoosened] = DiagnosticSeverity.Warning,
+        [U003TermsUnknownValue] = DiagnosticSeverity.Warning,
+        [U004TermsExcluded] = DiagnosticSeverity.Info,
     };
 
     /// <summary>Every code this Reader can report.</summary>

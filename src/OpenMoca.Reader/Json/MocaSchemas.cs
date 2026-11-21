@@ -83,6 +83,40 @@ public static partial class MocaSchemas
         return errors.Count > 0 ? errors : ["(root) does not match the schema"];
     }
 
+    /// <summary>
+    /// Every failing keyword, flat, as (instance location as a JSON Pointer, evaluation path, keyword, message). A false
+    /// schema (as under <c>additionalProperties: false</c>) fails with the keyword <c>""</c> at the rejected member.
+    /// For callers that classify failures, such as the terms check (package spec §4.14).
+    /// </summary>
+    internal static List<(string Where, string Path, string Keyword, string Message)> Failures(string name, JsonNode? value)
+    {
+        var element = value is null
+            ? JsonDocument.Parse("null").RootElement
+            : JsonSerializer.SerializeToElement(value, JsonNodeContext.Default.JsonNode);
+        var results = Schemas.Value[name].Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
+        var output = new List<(string, string, string, string)>();
+        if (results.IsValid)
+        {
+            return output;
+        }
+
+        void Walk(EvaluationResults node)
+        {
+            foreach (var (keyword, message) in node.Errors ?? new Dictionary<string, string>())
+            {
+                output.Add((node.InstanceLocation.ToString(), node.EvaluationPath.ToString(), keyword, message));
+            }
+
+            foreach (var detail in node.Details ?? [])
+            {
+                Walk(detail);
+            }
+        }
+
+        Walk(results);
+        return output;
+    }
+
     // Keywords whose error only says that a subschema below failed; that failure is reported where it happened.
     private static readonly HashSet<string> Summaries = new(StringComparer.Ordinal)
     {
