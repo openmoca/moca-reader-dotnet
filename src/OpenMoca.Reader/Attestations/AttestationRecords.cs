@@ -120,6 +120,12 @@ public static class AttestationFormats
             return (null, format == "dsse" ? "not a DSSE envelope" : "Sigstore bundle has no dsseEnvelope");
         }
 
+        // Attestations §7: an envelope with more signature entries than the limit is malformed; none is tried.
+        if (envelope["signatures"] is JsonArray { Count: > Dsse.MaxSignatures } signatureEntries)
+        {
+            return (null, $"the envelope has {signatureEntries.Count} signature entries, more than {Dsse.MaxSignatures}");
+        }
+
         if (payloadType != PayloadType)
         {
             return (null, $"unexpected payloadType {payloadType}");

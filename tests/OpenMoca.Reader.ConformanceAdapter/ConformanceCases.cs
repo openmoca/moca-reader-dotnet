@@ -509,6 +509,8 @@ public static class ConformanceCases
             MaxMembers = Int("maxMembers") ?? d.MaxMembers,
             MaxMemberBytes = JsonValues.IntegerOf(limits["maxMemberBytes"]) ?? d.MaxMemberBytes,
             MaxMemberDepth = Int("maxMemberDepth") ?? d.MaxMemberDepth,
+            MaxAttestations = Int("maxAttestations") ?? d.MaxAttestations,
+            MaxAttestationBytes = Int("maxAttestationBytes") ?? d.MaxAttestationBytes,
         };
     }
 

@@ -99,6 +99,46 @@ public static partial class StructureParser
 
         void Add(StructureFact fact) => facts.Add(fact with { Layer = layer, Origin = origin });
 
+        // Contract §3: a member list is walked once, however many collections name it, and the list cells reached from
+        // every skos:memberList statement, added together, stay within the triple limit.
+        var walked = new Dictionary<string, (List<(string Member, int Index)> Items, int Cells)>(StringComparer.Ordinal);
+        (List<(string Member, int Index)> Items, int Cells) MembersOf(INode head)
+        {
+            if (head is not IBlankNode first)
+            {
+                return ([], 0);
+            }
+
+            if (walked.TryGetValue(first.InternalID, out var known))
+            {
+                return known;
+            }
+
+            var items = new List<(string, int)>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var node = head;
+            var index = 0;
+            for (; node is IBlankNode cellNode && seen.Add(cellNode.InternalID); index++)
+            {
+                if (!lists.TryGetValue(cellNode.InternalID, out var cell) || cell.Head is null)
+                {
+                    break;
+                }
+
+                if (cell.Head is IUriNode member)
+                {
+                    items.Add((Iri(member), index));
+                }
+
+                node = cell.Tail;
+            }
+
+            walked[first.InternalID] = (items, index);
+            return (items, index);
+        }
+
+        long cells = 0;
+
         foreach (var t in triples)
         {
             var predicate = t.Predicate is IUriNode pu ? Iri(pu) : "";
@@ -140,21 +180,19 @@ public static partial class StructureParser
 
             if (predicate == $"{Skos}memberList")
             {
-                var node = t.Object;
-                var seen = new HashSet<string>(StringComparer.Ordinal);
-                for (var index = 0; node is IBlankNode cellNode && seen.Add(cellNode.InternalID); index++)
+                // A list reached again costs its cells again: a walk that starts part-way down another list is new work.
+                var (items, listCells) = MembersOf(t.Object);
+                cells += Math.Max(listCells, 1);
+                if (cells > limits.MaxTriples)
                 {
-                    if (!lists.TryGetValue(cellNode.InternalID, out var cell) || cell.Head is null)
-                    {
-                        break;
-                    }
+                    diagnostics.Add(DiagnosticCodes.O001OntologyUnparseable,
+                        $"{file} has more than {limits.MaxTriples} collection members, counting each collection's member list in full", file);
+                    return new ParseResult([], prefixes, false);
+                }
 
-                    if (cell.Head is IUriNode member)
-                    {
-                        Add(new StructureFact(s, "member", O: Iri(member), Index: index));
-                    }
-
-                    node = cell.Tail;
+                foreach (var (member, index) in items)
+                {
+                    Add(new StructureFact(s, "member", O: member, Index: index));
                 }
 
                 continue;

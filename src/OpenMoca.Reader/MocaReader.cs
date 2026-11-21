@@ -230,11 +230,23 @@ public static partial class MocaReader
         var now = options.Clock();
         var attestationFiles = bytes.Keys
             .Where(p => p.StartsWith(PackageDigest.AttestationsDirectory + "/", StringComparison.Ordinal) && AttestationFile().IsMatch(p))
-            .Order(StringComparer.Ordinal);
+            .Order(StringComparer.Ordinal)
+            .ToList();
         var pending = new List<(string File, AttestationFormats.Parsed Parsed, string Role, AttestationRecord Record)>();
+        // Contract §3: attestation files are bounded in number and in size, so verifying them is bounded work.
+        if (attestationFiles.Count > options.Limits.MaxAttestations)
+        {
+            diagnostics.Add(DiagnosticCodes.A001AttestationMalformed,
+                $"the package has {attestationFiles.Count} attestation files, over the {options.Limits.MaxAttestations} limit; none is read",
+                PackageDigest.AttestationsDirectory);
+            return;
+        }
+
         foreach (var file in attestationFiles)
         {
-            var (parsed, malformed) = AttestationFormats.Parse(file, bytes[file]);
+            var (parsed, malformed) = bytes[file].Length > options.Limits.MaxAttestationBytes
+                ? (null, $"larger than the {options.Limits.MaxAttestationBytes}-byte limit for an attestation file")
+                : AttestationFormats.Parse(file, bytes[file]);
             if (parsed is null)
             {
                 diagnostics.Add(DiagnosticCodes.A001AttestationMalformed, malformed!, file);
