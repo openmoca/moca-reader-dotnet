@@ -15,9 +15,14 @@ public static class JsonValues
     /// an escape that makes one is a <see cref="JsonException"/>, as any other invalid JSON is. .NET would otherwise
     /// accept it and throw later, when the string is read.
     /// </summary>
+    /// <summary>Contract §3: how deep JSON and YAML frontmatter in a package or a sidecar may nest. Fixed, not a default.</summary>
+    internal const int MaxDepth = 64;
+
     internal static JsonNode? Parse(string text, JsonDocumentOptions options = default)
     {
-        var node = JsonNode.Parse(text, documentOptions: options);
+        // Contract §3, "Nesting": at most 64 levels, the outermost object or array being level 1; deeper text is refused
+        // by the reader as it goes, without recursion. Fixed here, never left to the library's default.
+        var node = JsonNode.Parse(text, documentOptions: options with { MaxDepth = MaxDepth });
         if (HasUnpairedSurrogateEscape(text))
         {
             throw new JsonException("a string holds an unpaired surrogate (I-JSON, RFC 7493)");

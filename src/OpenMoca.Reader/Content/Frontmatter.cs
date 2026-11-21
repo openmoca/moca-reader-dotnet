@@ -145,7 +145,7 @@ internal static partial class CoreSchemaYaml
     /// never depends on the call stack (contract §3), and every value read stays within the JSON depth the schemas are
     /// checked at.
     /// </summary>
-    internal const int MaxDepth = 64;
+    internal const int MaxDepth = OpenMoca.Reader.Json.JsonValues.MaxDepth;
 
     private static JsonNode? ReadNode(IParser parser, int depth)
     {
