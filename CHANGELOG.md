@@ -34,8 +34,9 @@ Everything the Reader hands to a model goes through the creator's terms, not onl
 - **`U004` counts**: `Diagnostic.Excluded` (removed per reason) and `Diagnostic.Hidden` (how many came from packages
   hidden for the request). In a record from a search with a terms request, `supersededBy` and `contestedBy` name no
   hidden package.
-- **Agent Framework**: `MocaTools` and `MocaContextProvider` refuse a terms request with no `ai` part unless the host
-  sets `allowNoAiTerms` / `AllowNoAiTerms`; `moca_structure` answers from `StructureFor`.
+- **Agent Framework**: `MocaTools` and `MocaContextProvider` always pass a terms request with an `ai` part (contract
+  §15.4): the destination is the host's setting, default `provider`, and a request with no `ai` part is refused
+  (`ArgumentException`); there is no way to drop it. `moca_structure` answers from `StructureFor`.
 - Schemas re-vendored: `terms`, `citation-record` and the new `catalogue-entry`. The conformance adapter supports the
   `catalogue` case kind, `options.terms` on structure cases, `options.ingestTerms` and `termsExcluded`.
 

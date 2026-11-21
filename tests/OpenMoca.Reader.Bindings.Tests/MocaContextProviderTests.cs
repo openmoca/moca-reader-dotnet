@@ -185,7 +185,7 @@ public sealed class MocaContextProviderTests
     }
 
     [Fact]
-    public async Task ATermsRequestWithNoAiPart_IsRefused_UnlessTheHostSaysSoExplicitly()
+    public async Task ATermsRequestWithNoAiPart_IsAlwaysRefused_TheDestinationIsTheSetting()
     {
         var ct = TestContext.Current.CancellationToken;
         var (search, _) = await SupportKb(ct);
@@ -194,8 +194,10 @@ public sealed class MocaContextProviderTests
         Assert.Throws<ArgumentException>(() => new MocaTools(search, ratingOnly));
         Assert.Throws<ArgumentException>(() => new MocaContextProvider(search, new MocaContextOptions { Terms = ratingOnly }));
         Assert.Throws<ArgumentException>(() => new MocaContextProvider(search, new MocaContextOptions { Search = new SearchOptions { Terms = new TermsRequest() } }));
-        Assert.NotEmpty(new MocaTools(search, ratingOnly, allowNoAiTerms: true).All());
-        _ = new MocaContextProvider(search, new MocaContextOptions { Terms = ratingOnly, AllowNoAiTerms = true });
+        // Naming the destination is how a host chooses; a rating filter rides beside it.
+        var onDevice = ratingOnly with { Ai = new AiRequest(TermsDestinations.Device) };
+        Assert.NotEmpty(new MocaTools(search, onDevice).All());
+        _ = new MocaContextProvider(search, new MocaContextOptions { Terms = onDevice });
     }
 
     /// <summary>Contract §10 and §15.4: the structure tool answers only from packages not closed for the request.</summary>

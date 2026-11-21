@@ -28,26 +28,23 @@ public sealed class MocaTools
     /// The creator's terms applied to everything the tools return (Reader contract §15.4); null for a third party's
     /// model with no conditions (<see cref="TermsRequest.Provider"/>).
     /// </param>
-    /// <param name="allowNoAiTerms">
-    /// Lets <paramref name="terms"/> have no <c>ai</c> part, so the creator's <c>ai</c> terms remove nothing. Off by
-    /// default: a binding a model calls passes a request with an <c>ai</c> part (Reader interface §7).
-    /// </param>
-    /// <exception cref="ArgumentException"><paramref name="terms"/> has no <c>ai</c> part and <paramref name="allowNoAiTerms"/> is false.</exception>
-    public MocaTools(MocaSearch search, TermsRequest? terms = null, bool allowNoAiTerms = false)
+    /// <exception cref="ArgumentException"><paramref name="terms"/> has no <c>ai</c> part.</exception>
+    public MocaTools(MocaSearch search, TermsRequest? terms = null)
     {
         ArgumentNullException.ThrowIfNull(search);
         _search = search;
-        _terms = Checked(terms ?? TermsRequest.Provider, allowNoAiTerms, nameof(terms));
+        _terms = Checked(terms ?? TermsRequest.Provider, nameof(terms));
     }
 
     /// <summary>
-    /// Reader interface §7: a binding a model calls passes a terms request with an <c>ai</c> part, unless the host says
-    /// otherwise explicitly.
+    /// Reader contract §15.4 and Reader interface §7: a binding a model calls always passes a terms request with an
+    /// <c>ai</c> part. The destination (<c>device</c>, <c>host</c> or <c>provider</c>) is the host's explicit setting;
+    /// there is no way to drop the part.
     /// </summary>
-    internal static TermsRequest Checked(TermsRequest terms, bool allowNoAiTerms, string name) =>
-        terms.Ai is not null || allowNoAiTerms
+    internal static TermsRequest Checked(TermsRequest terms, string name) =>
+        terms.Ai is not null
             ? terms
-            : throw new ArgumentException("A terms request handed to a model needs an ai part (Reader interface §7). Leave it null for a provider with no conditions, name the destination, or set allowNoAiTerms explicitly.", name);
+            : throw new ArgumentException("A terms request handed to a model needs an ai part (Reader contract §15.4). Leave it null for a provider with no conditions, or name the destination: device, host or provider.", name);
 
     /// <summary>
     /// The tools as AI functions. Over a store backend, where there is no library to read nodes or structure from,

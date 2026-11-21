@@ -168,9 +168,9 @@ the tools hand the model
 by default as a third party's model with no conditions. Set
 `MocaContextOptions.Terms` (or pass a `TermsRequest` to `MocaTools`) when the
 model runs on the person's device or in your own service. The request always
-needs an `ai` part: a request without one is refused unless you set
-`AllowNoAiTerms` (or `allowNoAiTerms`) yourself. The `moca_structure` tool
-answers from `StructureFor`.
+has an `ai` part: its destination (`device`, `host` or `provider`) is your
+setting, and a request without one is refused (`ArgumentException`). The
+`moca_structure` tool answers from `StructureFor`.
 
 ```csharp
 using OpenMoca.Reader.VectorData;
