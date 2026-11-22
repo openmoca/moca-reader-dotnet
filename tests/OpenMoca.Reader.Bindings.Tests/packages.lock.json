@@ -330,7 +330,7 @@
       "openmoca.reader.agentframework": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Agents.AI.Abstractions": "[1.26.0, )",
+          "Microsoft.Agents.AI.Abstractions": "[1.28.0, )",
           "OpenMoca.Reader": "[0.7.0, )"
         }
       },
@@ -394,11 +394,11 @@
       },
       "Microsoft.Agents.AI.Abstractions": {
         "type": "CentralTransitive",
-        "requested": "[1.26.0, )",
-        "resolved": "1.26.0",
-        "contentHash": "BeFCZFMdAw1iU7OTDItwPrfWlqmP2lURsSc+V3bH17aJNxiF90TM7vCpYT9sJ/EaNzK1vRq4Rm4Fa+WLxk92Ug==",
+        "requested": "[1.28.0, )",
+        "resolved": "1.28.0",
+        "contentHash": "f0pcDqs9JUHffTMjdsktAF+pa7On+q3w8MoyuWzl8mYTT+U+tMuP5N2qvQtyfC3N2SvVWkdkdZNqnRdonySkjg==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.10.1"
+          "Microsoft.Extensions.AI.Abstractions": "10.11.0"
         }
       },
       "Microsoft.Extensions.AI.Abstractions": {
