@@ -11,6 +11,12 @@
     <PackageProjectUrl>https://github.com/openmoca/moca-reader-dotnet</PackageProjectUrl>
     <RepositoryUrl>https://github.com/openmoca/moca-reader-dotnet</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <!-- The logo, one copy at the repository root, in every package (the same file as moca-mcp-dotnet's). -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 </Project>
