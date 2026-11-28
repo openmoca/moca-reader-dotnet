@@ -23,6 +23,11 @@ For moca-spec 0.8.0: content in more than one language.
   one. When a loaded node's representations differ in those steps, `locale` is applied in the gate, not pushed down
   (§9.5). Unit test in `SearchLanguageTests`.
 
+### Added
+
+- **Relations `translationOf` and `editionOf`** (package spec §7.2): core types, reported with no effect and no
+  `R005`. The vendored manifest schema's description names them.
+
 ## Unreleased: 0.8.0
 
 Pre-release `0.8.0-preview.1`, from the `release-0.8.0` branch. Nothing here changes what a Reader must do (the Reader
