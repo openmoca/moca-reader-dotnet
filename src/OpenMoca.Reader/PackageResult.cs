@@ -88,6 +88,14 @@ public sealed class PackageResult
     /// </summary>
     public IReadOnlyDictionary<string, ManifestTranslation>? Translations { get; internal set; }
 
+    /// <summary>
+    /// Reader interface §4: for each language the package's nodes come in (each default file's <c>moca.language</c>,
+    /// else the manifest's <c>language</c>, and each tag in <c>locales</c>, as written), how many nodes have a
+    /// representation in it, and of how many (<c>{ "fr": { nodes: 12, of: 40 } }</c>). Null when the package has no
+    /// nodes or no language at all.
+    /// </summary>
+    public IReadOnlyDictionary<string, Content.LocaleCount>? LocaleCoverage { get; internal set; }
+
     /// <summary>The package tags without repeats (package spec §4.8). Null when the manifest has none or the package is invalid.</summary>
     public IReadOnlyList<string>? Tags { get; internal set; }
 

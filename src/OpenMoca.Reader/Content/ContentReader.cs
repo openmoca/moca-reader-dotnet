@@ -314,6 +314,25 @@ internal static partial class ContentReader
                     $"locale variant has no default-language file {ContentDirectory}/{node.Path}", node.Representations[0].File);
             }
 
+            // Package spec §5.3 and §5.4: a default file's moca.language is its node's language; in a translation it is
+            // ignored. A tag that does not parse already has its C005 from the node schema.
+            foreach (var rep in node.Representations)
+            {
+                if (!rep.Moca.TryGetPropertyValue("language", out var own))
+                {
+                    continue;
+                }
+
+                if (rep.Locale is not null)
+                {
+                    diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"moca.language is ignored in a translation ({rep.File}): its file name says its language", rep.File);
+                }
+                else if (JsonValues.StringOf(own) is { } tag && LanguageTag().IsMatch(tag))
+                {
+                    node.Language = tag;
+                }
+            }
+
             // Package spec §5.4: C010 applies to the window each representation ends up with, on its own file.
             foreach (var rep in node.Representations)
             {
@@ -324,6 +343,40 @@ internal static partial class ContentReader
         }
 
         return nodes;
+    }
+
+    /// <summary>
+    /// Reader interface §4: for each language the nodes come in (each default file's language, and each tag in
+    /// <c>locales</c>, as written), how many nodes have a representation in it, and of how many; ordered by tag. Null
+    /// with no node or no language.
+    /// </summary>
+    public static IReadOnlyDictionary<string, LocaleCount>? LocaleCoverage(JsonObject? manifest, IReadOnlyList<ContentNode> nodes)
+    {
+        if (nodes.Count == 0)
+        {
+            return null;
+        }
+
+        var counts = new SortedDictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var tag in (manifest?["locales"] as JsonArray ?? []).Select(JsonValues.StringOf).OfType<string>())
+        {
+            counts.TryAdd(tag, new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        foreach (var node in nodes)
+        {
+            foreach (var tag in node.Representations.Select(r => r.Locale ?? node.Language).OfType<string>().Distinct(StringComparer.Ordinal))
+            {
+                if (!counts.TryGetValue(tag, out var set))
+                {
+                    counts[tag] = set = new HashSet<string>(StringComparer.Ordinal);
+                }
+
+                set.Add(node.Path);
+            }
+        }
+
+        return counts.Count == 0 ? null : counts.ToDictionary(kv => kv.Key, kv => new LocaleCount(kv.Value.Count, nodes.Count), StringComparer.Ordinal);
     }
 
     /// <summary>Package spec §5.4: <c>name.tag.md</c> is a representation only when <c>tag</c> is a declared locale.</summary>

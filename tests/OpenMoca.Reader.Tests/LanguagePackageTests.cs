@@ -82,4 +82,24 @@ public sealed class LanguagePackageTests : IDisposable
         Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.C006EvidenceSourceUnknown);
         Assert.Equal(3, result.Diagnostics.Count(d => d.Code == DiagnosticCodes.C005FieldInvalid && d.Message.Contains("caption track", StringComparison.Ordinal)));
     }
+
+    [Fact]
+    public async Task MocaLanguage_SetsTheNodesLanguage_InADefaultFileOnly_AndLocaleCoverageCountsIt()
+    {
+        var result = await ReadAsync(
+            """{ "id": "https://example.com/n", "version": "1.0.0", "title": "N", "language": "en", "locales": ["fr", "de"] }""",
+            ("content/a.md", "---\ntype: Note\ntitle: A\n---\n\nA.\n"),
+            ("content/a.fr.md", "---\ntype: Note\ntitle: A\nmoca:\n  language: it\n---\n\nA.\n"),
+            ("content/b.md", "---\ntype: Note\ntitle: B\nmoca:\n  language: cy\n---\n\nB.\n"));
+        var library = new Library().Add(result);
+
+        Assert.Equal(
+            new Dictionary<string, LocaleCount> { ["cy"] = new(1, 2), ["de"] = new(0, 2), ["en"] = new(1, 2), ["fr"] = new(1, 2) },
+            result.LocaleCoverage);
+        Assert.Equal(["cy", "de", "en", "fr"], result.LocaleCoverage!.Keys);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.C005FieldInvalid && d.File == "content/a.fr.md");
+        Assert.Equal("cy", library.Get("https://example.com/n#b.md")!.Node.Locale);
+        Assert.Equal("cy", library.Get("https://example.com/n#b.md", ["cy"])!.Node.Locale);
+        Assert.Equal("en", library.Get("https://example.com/n#a.md", ["it"])!.Node.Locale);
+    }
 }

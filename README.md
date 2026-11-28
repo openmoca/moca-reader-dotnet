@@ -66,6 +66,11 @@ IReadOnlyList<EditionItem> editions = library.Structure.Editions("https://exampl
 string? chosen = library.Structure.ChooseEdition("https://example.com/course#bread", ["fr"]);
 ```
 
+- A page in another language than its package's (a Welsh page in an English
+  package, or a glossary in several, `mul`) says so with `moca.language` in
+  its default file; its records' `node.locale` is that language.
+- `result.LocaleCoverage` says how far the nodes come in each language:
+  `{ "en": { nodes: 40, of: 40 }, "fr": { nodes: 12, of: 40 } }`.
 - A translation that does not write `moca.concepts`, `status`,
   `moca.valid_from`, `moca.valid_until` or `moca.audience` has its default
   file's, so it is found by topic and retired with the original.

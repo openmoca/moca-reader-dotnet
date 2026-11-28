@@ -132,6 +132,7 @@ public static class ConformanceCases
             ["publisher"] = result.Publisher is { } publisher ? JsonSerializer.SerializeToNode(publisher, CitationJson.Options) : null,
             ["url"] = result.Url,
             ["contributors"] = result.Contributors is { } contributors ? JsonSerializer.SerializeToNode(contributors, CitationJson.Options) : null,
+            ["localeCoverage"] = result.LocaleCoverage is { } coverage ? JsonSerializer.SerializeToNode(coverage, CitationJson.Options) : null,
             ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,

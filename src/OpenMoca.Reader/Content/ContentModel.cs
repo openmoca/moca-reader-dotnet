@@ -84,6 +84,13 @@ public sealed class Representation
     public JsonObject Moca => Frontmatter["moca"] as JsonObject ?? [];
 }
 
+/// <summary>Reader interface §4: how many nodes have a representation in one language, and of how many.</summary>
+/// <param name="Nodes">The nodes with a representation in the language.</param>
+/// <param name="Of">The package's nodes.</param>
+public sealed record LocaleCount(
+    [property: System.Text.Json.Serialization.JsonPropertyName("nodes")] int Nodes,
+    [property: System.Text.Json.Serialization.JsonPropertyName("of")] int Of);
+
 /// <summary>An OKF concept document under <c>content/</c>, with its locale representations.</summary>
 public sealed class ContentNode
 {
@@ -91,8 +98,9 @@ public sealed class ContentNode
     public required string Path { get; init; }
 
     /// <summary>
-    /// The default representation's language (package spec §5.4): the manifest's <c>language</c>, or null when it has
-    /// none. Its tag in the locale lookup, and its records' <c>node.locale</c>.
+    /// The default representation's language (package spec §5.3, §5.4): its own <c>moca.language</c>, else the
+    /// manifest's <c>language</c>, or null when there is neither. Its tag in the locale lookup, and its records'
+    /// <c>node.locale</c>.
     /// </summary>
     public string? Language { get; internal set; }
 

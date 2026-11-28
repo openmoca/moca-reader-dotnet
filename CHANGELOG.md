@@ -43,6 +43,11 @@ For moca-spec 0.8.0: content in more than one language.
   (`MediaDescription.Captions`, `CitationMedia.Captions`, `CaptionTrack`). Evidence is still checked against
   `transcript` only. The vendored node and citation-record schemas follow moca-spec. Unit test in
   `LanguagePackageTests`.
+- **`moca.language`** (package spec §5.3, §5.4): a default file's own language sets its node's `Language`, so its
+  `node.locale` and its tag in the lookup; in a translation it is `C005` and ignored. The vendored node schema
+  follows moca-spec.
+- **`PackageResult.LocaleCoverage`** (Reader interface §4): for each language, how many nodes have a representation in
+  it, and of how many (`LocaleCount`). Unit test in `LanguagePackageTests`.
 
 ## Unreleased: 0.8.0
 

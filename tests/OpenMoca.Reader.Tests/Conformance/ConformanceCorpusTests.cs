@@ -86,6 +86,16 @@ public sealed class ConformanceCorpusTests
             }
         }
 
+        // Package spec §4.6–4.13, Reader interface §4, attestations §7.1: result fields compared as JSON values; null
+        // means absent.
+        foreach (var field in new[] { "images", "translations", "tags", "apps", "readingOrder", "issuedCopy", "datePublished", "datePackaged", "publisher", "url", "contributors", "localeCoverage" })
+        {
+            if (e.TryGetPropertyValue(field, out var want) && Canonical(want) != Canonical(actual[field]))
+            {
+                problems.Add($"{field}: expected {Canonical(want)}, got {Canonical(actual[field])}");
+            }
+        }
+
         if (e["sidecarUsable"] is JsonValue usable && usable.GetValue<bool>() != (actual["sidecarUsable"]?.GetValue<bool>()))
         {
             problems.Add($"sidecarUsable: expected {usable}, got {actual["sidecarUsable"]}");
