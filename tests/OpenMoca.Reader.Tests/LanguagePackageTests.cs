@@ -102,4 +102,24 @@ public sealed class LanguagePackageTests : IDisposable
         Assert.Equal("cy", library.Get("https://example.com/n#b.md", ["cy"])!.Node.Locale);
         Assert.Equal("en", library.Get("https://example.com/n#a.md", ["it"])!.Node.Locale);
     }
+
+    [Fact]
+    public async Task APackageState_KnowsANodeInItsOwnLanguage_SoAStoredRecordMapsToItsDefaultFile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var result = await ReadAsync(
+            """{ "id": "https://example.com/s", "version": "1.0.0", "title": "S", "language": "en" }""",
+            ("content/a.md", "---\ntype: Note\ntitle: A\nmoca:\n  contested_by: [\"https://example.com/other\"]\n---\n\nbread.\n"),
+            ("content/b.md", "---\ntype: Note\ntitle: B\nmoca:\n  language: cy\n  contested_by: [\"https://example.com/other\"]\n---\n\nbara bread.\n"));
+        var state = PackageState.From(result);
+        var library = new Library().Add(result);
+        var store = await new OpenMoca.Reader.Search.MemoryStoreBackend().IngestAsync(library, ct);
+
+        var records = await new OpenMoca.Reader.Search.MocaSearch([state], library.Clock, store).SearchAsync("bread", cancellationToken: ct);
+
+        Assert.Equal(new Dictionary<string, string> { ["b.md"] = "cy" }, state.NodeLanguages);
+        Assert.Contains("\"nodeLanguages\":{\"b.md\":\"cy\"}", System.Text.Json.JsonSerializer.Serialize(state), StringComparison.Ordinal);
+        Assert.Equal(2, records.Count);
+        Assert.All(records, r => Assert.Equal(["https://example.com/other"], r.Trust.ContestedBy!));
+    }
 }
