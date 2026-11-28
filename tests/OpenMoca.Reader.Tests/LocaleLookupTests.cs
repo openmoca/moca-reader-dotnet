@@ -91,4 +91,35 @@ public sealed class LocaleLookupTests
         Assert.Equal("fr", library.Get(id, ["fr-CA", "en"])!.Node.Locale);
         Assert.Equal(library.Packages[0].Result.Manifest!["language"]!.GetValue<string>(), library.Get(id, ["it"])!.Node.Locale);
     }
+
+    [Fact]
+    public void LocaleRequest_TakesATagOrAPriorityList_AndEmptyIsNoRequest()
+    {
+        LocaleRequest? one = "fr";
+        LocaleRequest? list = ["fr-CA", "", "en"];
+        LocaleRequest? array = new[] { "pt-AO", "en" };
+        LocaleRequest? none = "";
+        LocaleRequest? empty = [];
+
+        Assert.Equal(["fr"], one!);
+        Assert.Equal(["fr-CA", "en"], list!);
+        Assert.Equal(["pt-AO", "en"], array!);
+        Assert.Null(none);
+        Assert.True(empty!.IsEmpty);
+        Assert.Equal("default", Citations.Citations.PickRepresentation(Node("en", "fr"), empty).Locale ?? "default");
+    }
+
+    [Fact]
+    public async Task SearchAndGet_TakeAPlainTag()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var library = new Library().Add(await MocaReader.ReadPackageAsync(Path.Combine(MocaSpec.Examples, "support-kb"), cancellationToken: ct));
+        var id = library.Packages[0].Result.Id + "#refund-window.md";
+
+        Assert.Equal("fr", library.Get(id, "fr")!.Node.Locale);
+        var french = await library.SearchAsync("remboursement", new Search.SearchOptions { Locale = "fr", Limit = 3 }, cancellationToken: ct);
+
+        Assert.NotEmpty(french);
+        Assert.All(french, r => Assert.Equal("fr", r.Node.Locale));
+    }
 }

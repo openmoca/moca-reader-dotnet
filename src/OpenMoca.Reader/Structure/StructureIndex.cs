@@ -200,7 +200,7 @@ public sealed class StructureIndex
     /// of narrower, parts or both, to its descendants. The default retrieval policy applies unless
     /// <paramref name="includeAll"/>. Ordered by <c>node.ref</c>.
     /// </summary>
-    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", IReadOnlyList<string>? locale = null, bool includeAll = false)
+    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", LocaleRequest? locale = null, bool includeAll = false)
     {
         var wanted = new HashSet<string>(StringComparer.Ordinal) { iri };
         if (include != "none")
@@ -266,8 +266,8 @@ public sealed class StructureIndex
     /// "Choosing"), or null when it is no slot or has no edition that can be chosen.
     /// </summary>
     /// <param name="iri">The slot.</param>
-    /// <param name="locale">A priority list of language tags; null or empty for none.</param>
-    public string? ChooseEdition(string iri, IReadOnlyList<string>? locale) =>
+    /// <param name="locale">A language tag or a priority list of them; null or empty for none.</param>
+    public string? ChooseEdition(string iri, LocaleRequest? locale) =>
         SlotOf(iri) is { } found
             ? OpenMoca.Reader.Structure.Editions.Choose(found.Slot, found.Available.ToDictionary(kv => kv.Key, kv => JsonValues.StringOf(kv.Value.Manifest?["language"]) is { Length: > 0 } l ? l : null, StringComparer.Ordinal), locale)
             : null;

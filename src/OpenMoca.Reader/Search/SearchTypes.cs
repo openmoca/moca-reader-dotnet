@@ -25,7 +25,7 @@ public sealed record SearchFilters(
     IReadOnlyList<string> Digests,
     IReadOnlyList<ExcludedNode> Exclude,
     IReadOnlyList<string>? Audiences = null,
-    IReadOnlyList<string>? Locale = null,
+    LocaleRequest? Locale = null,
     IReadOnlyList<string>? Concepts = null,
     bool AllowUnlabelled = false)
 {
@@ -131,10 +131,10 @@ public sealed record SearchOptions
     public bool IncludeAll { get; init; }
 
     /// <summary>
-    /// A priority list of language tags, most preferred first (<c>["fr-CA", "en"]</c>; one tag is a list of one): keep,
-    /// for each node, only the representation package spec §5.4 selects for it. Null or empty is no locale.
+    /// A language tag or a priority list of them, most preferred first (<c>"fr"</c>, <c>["fr-CA", "en"]</c>): keep, for
+    /// each node, only the representation package spec §5.4 selects for it. Null or empty is no locale.
     /// </summary>
-    public IReadOnlyList<string>? Locale { get; init; }
+    public LocaleRequest? Locale { get; init; }
 
     /// <summary>
     /// What the locale does (Reader contract §9); no effect without one. <see cref="LocaleMode.Choose"/> (the default)

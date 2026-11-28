@@ -43,9 +43,9 @@ way, so they return the same results:
 - No stemming. A host that needs it supplies its own lexical backend.
 - Without a locale, every language of a node is searched and its best match
   returned; with one, the representation package spec §5.4 selects. A locale
-  is a priority list of language tags (`Locale = ["fr-CA", "en"]`); one tag is
-  a list of one. `library.Get(id, ["fr-CA", "en"])` and `library.Citations(...)`
-  take the same list.
+  is a language tag or a priority list of them (`Locale = "fr"`,
+  `Locale = ["fr-CA", "en"]`), a `LocaleRequest`. `library.Get(id, ["fr-CA", "en"])`
+  and `library.Citations(...)` take the same.
 
 Characters added in very recent Unicode versions can tokenise differently
 across Readers, because each language runtime ships its own Unicode data.

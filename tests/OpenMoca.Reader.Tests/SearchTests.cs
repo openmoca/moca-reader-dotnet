@@ -45,7 +45,7 @@ public sealed class SearchTests
         var search = new MocaSearch(library, new LexicalBackend(library));
 
         var hit = Assert.Single(await search.SearchAsync("remboursement", new SearchOptions { Limit = 1 }, ct));
-        var english = await search.SearchAsync("remboursement", new SearchOptions { Locale = ["en"] }, ct);
+        var english = await search.SearchAsync("remboursement", new SearchOptions { Locale = "en" }, ct);
 
         Assert.Equal(("refund-window.md", "fr"), (hit.Node.Path, hit.Node.Locale));
         Assert.Empty(english);

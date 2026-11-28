@@ -12,9 +12,6 @@ For moca-spec 0.8.0: content in more than one language.
   and each truncation of the request also finds tags that start with it, so `pt-AO` finds `pt-BR` and `en` finds the
   default file before `en-GB`. A new public class, `LocaleLookup` (`List`, `Lookup`, `Matches`,
   `RepresentationTag`); `ContentNode` carries its default `Language`. Unit tests in `LocaleLookupTests`.
-- **`locale` is a priority list** (breaking): `SearchOptions.Locale`, `SearchFilters.Locale`, `Library.Citations`,
-  `Library.Get` and `StructureIndex.Nodes` take an `IReadOnlyList<string>` (`["fr-CA", "en"]`; one tag is a list of
-  one) instead of a string. The pushdown filter carries the list.
 - **A translation inherits** its default file's `moca.concepts`, `status`, `moca.valid_from` and `moca.valid_until`
   when it writes none, each key on its own, as it already did `moca.audience` (package spec §5.4). `C010` is checked
   on the window each representation ends up with. Unit tests in `InheritanceTests`.
@@ -26,6 +23,11 @@ For moca-spec 0.8.0: content in more than one language.
 
 ### Added
 
+- **`locale` as a priority list**: `SearchOptions.Locale`, `SearchFilters.Locale`, `Library.Citations`,
+  `Library.Get`, `StructureIndex.Nodes` and `StructureIndex.ChooseEdition` take a `LocaleRequest`, an immutable
+  priority list with implicit conversions from a string and from a string array or collection expression, so
+  `Locale = "fr"` still works beside `Locale = ["fr-CA", "en"]`. An empty list, like a null or empty string, is no
+  locale. The pushdown filter carries the list.
 - **Relations `translationOf` and `editionOf`** (package spec §7.2): core types, reported with no effect and no
   `R005`. The vendored manifest schema's description names them.
 - **Edition groups** (package spec §7.4): `schema:workExample` and `moca:defaultEdition` in a composite's own

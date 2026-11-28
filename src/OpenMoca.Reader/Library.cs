@@ -314,14 +314,14 @@ public sealed class Library
     /// <summary>
     /// Every node's citation record, one per node, in the representation the locale selects (package spec §5.4).
     /// </summary>
-    /// <param name="locale">A priority list of language tags, most preferred first (<c>["fr-CA", "en"]</c>); null or
-    /// empty for each node's default representation.</param>
+    /// <param name="locale">A language tag or a priority list of them, most preferred first (<c>"fr"</c>,
+    /// <c>["fr-CA", "en"]</c>); null or empty for each node's default representation.</param>
     /// <param name="includeText">Whether records carry their text.</param>
-    public IReadOnlyList<CitationRecord> Citations(IReadOnlyList<string>? locale = null, bool includeText = false) =>
+    public IReadOnlyList<CitationRecord> Citations(LocaleRequest? locale = null, bool includeText = false) =>
         Citations(locale, includeText, _packages);
 
     /// <summary>The citation records of some of the loaded packages, with relations among every loaded package.</summary>
-    internal IReadOnlyList<CitationRecord> Citations(IReadOnlyList<string>? locale, bool includeText, IReadOnlyList<LoadedPackage> packages)
+    internal IReadOnlyList<CitationRecord> Citations(LocaleRequest? locale, bool includeText, IReadOnlyList<LoadedPackage> packages)
     {
         var index = Relations();
         var now = Clock();
@@ -343,9 +343,9 @@ public sealed class Library
     /// (<c>&lt;package id&gt;@&lt;version&gt;#&lt;path&gt;</c>). An id matches the first loaded version.
     /// </summary>
     /// <param name="nodeRef">The node id or versioned reference.</param>
-    /// <param name="locale">A priority list of language tags (package spec §5.4); null or empty for the default representation.</param>
+    /// <param name="locale">A language tag or a priority list of them (package spec §5.4); null or empty for the default representation.</param>
     /// <param name="includeText">Whether the record carries its text.</param>
-    public CitationRecord? Get(string nodeRef, IReadOnlyList<string>? locale = null, bool includeText = true)
+    public CitationRecord? Get(string nodeRef, LocaleRequest? locale = null, bool includeText = true)
     {
         var hash = nodeRef.LastIndexOf('#');
         if (hash < 0)

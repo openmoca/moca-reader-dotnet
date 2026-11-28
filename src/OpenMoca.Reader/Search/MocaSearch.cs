@@ -153,7 +153,7 @@ public sealed class MocaSearch
         var caller = options with
         {
             Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null,
-            Locale = LocaleLookup.List(options.Locale) is { Count: > 0 } locales ? locales : null,
+            Locale = options.Locale is { IsEmpty: false } locales ? locales : null,
         };
         var findings = new DiagnosticBag();
         // Contract §9: an upTo that no loaded reading order places limits nothing, and never silently.

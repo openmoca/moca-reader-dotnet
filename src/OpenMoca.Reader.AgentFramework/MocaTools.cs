@@ -75,7 +75,7 @@ public sealed class MocaTools
         var options = new SearchOptions
         {
             Limit = Math.Clamp(limit, 1, MaxLimit),
-            Locale = locale is null ? null : [locale],
+            Locale = locale,
             IncludeAll = include_all,
             Concepts = concepts,
             Scope = scope,
@@ -90,7 +90,7 @@ public sealed class MocaTools
         [Description("The node id or ref, from a search result.")] string node_id,
         [Description("Preferred BCP 47 locale.")] string? locale = null)
     {
-        var record = _search.Library!.Get(node_id, locale is null ? null : [locale]);
+        var record = _search.Library!.Get(node_id, locale);
         record = record is not null && Allowed(record) ? _search.ApplyTerms([record], _terms).FirstOrDefault() : null;
         if (record is null)
         {

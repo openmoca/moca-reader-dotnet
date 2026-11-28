@@ -217,10 +217,10 @@ public static class ConformanceCases
     }
 
     /// <summary>Package spec §5.4: a locale is a tag or a priority list.</summary>
-    private static List<string>? LocaleOf(JsonNode? locale) => locale switch
+    private static LocaleRequest? LocaleOf(JsonNode? locale) => locale switch
     {
-        JsonArray list => [.. list.Select(Str).OfType<string>()],
-        JsonValue one when Str(one) is { } tag => [tag],
+        JsonArray list => LocaleRequest.From(list.Select(Str)),
+        JsonValue one => Str(one),
         _ => null,
     };
 
