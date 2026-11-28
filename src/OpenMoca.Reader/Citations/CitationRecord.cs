@@ -170,6 +170,10 @@ public sealed record CitationMedia(
     /// <summary>The alternate's stretches; present with <see cref="AlternateOf"/>.</summary>
     [JsonPropertyName("sync")]
     public IReadOnlyList<OpenMoca.Reader.Content.SyncEntry>? Sync { get; init; }
+
+    /// <summary>The caption and subtitle tracks that stand, each with its <c>kind</c> (package spec §5.7).</summary>
+    [JsonPropertyName("captions")]
+    public IReadOnlyList<OpenMoca.Reader.Content.CaptionTrack>? Captions { get; init; }
 }
 
 /// <summary>UTF-8 byte offsets into the node file.</summary>

@@ -456,7 +456,14 @@ internal static partial class ContentReader
     [GeneratedRegex(@"^sha256:[a-f0-9]{64}\z")]
     private static partial Regex Sha256Digest();
 
-    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript", "alternateOf", "sync"], StringComparer.Ordinal);
+    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript", "alternateOf", "sync", "captions"], StringComparer.Ordinal);
+
+    // Package spec §5.7, caption tracks: HTML's track kinds, and the BCP 47 shape the manifest's tags have.
+    private static readonly HashSet<string> CaptionKinds = new(["subtitles", "captions", "descriptions", "chapters"], StringComparer.Ordinal);
+    private static readonly HashSet<string> CaptionKeys = new(["source", "language", "kind"], StringComparer.Ordinal);
+
+    [GeneratedRegex(@"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*\z")]
+    private static partial Regex LanguageTag();
 
     /// <summary>A finite JSON number, or null.</summary>
     private static double? NumberOf(JsonNode? node)
@@ -512,6 +519,12 @@ internal static partial class ContentReader
         }
 
         if (m.ContainsKey("alternateOf") && JsonValues.StringOf(m["alternateOf"]) is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        // Package spec §5.7: a bad caption entry is dropped on its own; only a captions that is not a list fails the description.
+        if (m.ContainsKey("captions") && m["captions"] is not JsonArray)
         {
             return false;
         }
@@ -618,6 +631,7 @@ internal static partial class ContentReader
             output.Add(new MediaDescription(sourceId, resource, JsonValues.StringOf(m["type"])!, NumberOf(m["duration"]), JsonValues.StringOf(m["digest"]), transcript)
             {
                 TranscriptPath = transcriptPath,
+                Captions = m["captions"] is JsonArray captions ? CaptionTracks(file, sourceId, captions, sources, files, diagnostics) : null,
             });
             raw.Add(m);
         }
@@ -653,6 +667,59 @@ internal static partial class ContentReader
         }
 
         return output;
+    }
+
+    /// <summary>
+    /// Package spec §5.7, caption tracks: each entry checked on its own, and the description stands. An entry that is not
+    /// <c>{ source, language, kind? }</c> with a BCP 47 tag and an HTML track kind, a second entry with the same source,
+    /// or a source that is not a WebVTT file under sources/ or media/ is C005; an unknown source is C006. Null when no
+    /// track stands.
+    /// </summary>
+    private static List<CaptionTrack>? CaptionTracks(string file, string mediaSource, JsonArray captions, Dictionary<string, JsonObject> sources,
+        IReadOnlyDictionary<string, string> files, DiagnosticBag diagnostics)
+    {
+        var tracks = new List<CaptionTrack>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in captions)
+        {
+            var c = entry as JsonObject;
+            var source = JsonValues.StringOf(c?["source"]);
+            var language = JsonValues.StringOf(c?["language"]);
+            var kind = c is not null && c.ContainsKey("kind") ? JsonValues.StringOf(c["kind"]) : "subtitles";
+            if (c is null || c.Any(p => !CaptionKeys.Contains(p.Key)) || source is not { Length: > 0 } || language is null
+                || !LanguageTag().IsMatch(language) || kind is null || !CaptionKinds.Contains(kind))
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid,
+                    $"media \"{mediaSource}\" has a caption track that is not {{ source, language, kind? }} with a BCP 47 tag and an HTML track kind; it is dropped", file);
+                continue;
+            }
+
+            if (!sources.TryGetValue(source, out var declared))
+            {
+                diagnostics.Add(DiagnosticCodes.C006EvidenceSourceUnknown,
+                    $"media \"{mediaSource}\" has a caption track \"{source}\", which sources[] does not declare; it is dropped", file);
+                continue;
+            }
+
+            if (seen.Contains(source))
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media \"{mediaSource}\" lists caption track \"{source}\" twice; the later one is dropped", file);
+                continue;
+            }
+
+            var path = LocalEvidencePath(file, JsonValues.StringOf(declared["resource"]), files);
+            if (path is null || EvidenceText.KindOf(path) != SourceKind.WebVtt)
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid,
+                    $"media \"{mediaSource}\" caption track \"{source}\" is not a WebVTT file under sources/ or media/; it is dropped", file);
+                continue;
+            }
+
+            seen.Add(source);
+            tracks.Add(new CaptionTrack(source, language, kind));
+        }
+
+        return tracks.Count > 0 ? tracks : null;
     }
 
     /// <summary>

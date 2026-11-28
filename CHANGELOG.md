@@ -38,6 +38,11 @@ For moca-spec 0.8.0: content in more than one language.
 - **`SearchOptions.LocaleMode`** (contract §9): `Choose` (the default), `Only` (records in another language drop out,
   in the gate) and `First` (records ordered by the first locale entry they match, then the next; the search asks
   again until `Limit` records of the first group pass). Unit test in `SearchLanguageTests`.
+- **Caption tracks** (package spec §5.7): `captions` on a media description, each `{ source, language, kind? }`,
+  checked entry by entry (`C005`, `C006`; the description stands) and carried in `node.media` with `kind` filled in
+  (`MediaDescription.Captions`, `CitationMedia.Captions`, `CaptionTrack`). Evidence is still checked against
+  `transcript` only. The vendored node and citation-record schemas follow moca-spec. Unit test in
+  `LanguagePackageTests`.
 
 ## Unreleased: 0.8.0
 

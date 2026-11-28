@@ -150,7 +150,7 @@ public static class Citations
                 License = license,
                 Copyright = copyright,
                 // Package spec §5.7: the valid media descriptions, in order.
-                Media = rep.Media.Count > 0 ? [.. rep.Media.Select(d => new CitationMedia(d.Source, d.Resource, d.Type, d.Duration, d.Digest, d.Transcript) { AlternateOf = d.AlternateOf, Sync = d.Sync })] : null,
+                Media = rep.Media.Count > 0 ? [.. rep.Media.Select(d => new CitationMedia(d.Source, d.Resource, d.Type, d.Duration, d.Digest, d.Transcript) { AlternateOf = d.AlternateOf, Sync = d.Sync, Captions = d.Captions })] : null,
             },
             Span = new CitationSpan(rep.BodyOffset, rep.BodyOffset + Encoding.UTF8.GetByteCount(body)),
             Text = text,

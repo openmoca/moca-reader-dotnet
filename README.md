@@ -79,6 +79,10 @@ string? chosen = library.Structure.ChooseEdition("https://example.com/course#bre
   composite's signers speak for the edition's package, or the library allows
   unsigned relations. Package states carry the slots, so a store search does
   the same.
+- A media description's caption and subtitle tracks are in
+  `record.Node.Media[i].Captions`, each with its source, language and kind
+  (`subtitles` when the package gives none). Evidence is still checked
+  against the `transcript` only.
 
 ## Conformance
 
@@ -362,7 +366,8 @@ mapping, in the specification.
 | [age v1](https://age-encryption.org/v1) (X25519 and scrypt recipients) | `OpenMoca.Reader.Age`: encrypted packages, decrypt only | follow |
 | [SKOS](https://www.w3.org/TR/skos-reference/) and [Dublin Core terms](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/) in RDF 1.1 Turtle | `structure.ttl` | follow (the named terms) |
 | [schema.org](https://schema.org/) `workExample` | edition groups in a composite's `structure.ttl` | follow (that term) |
-| [WebVTT](https://www.w3.org/TR/webvtt1/) | transcripts that evidence cites | follow |
+| [WebVTT](https://www.w3.org/TR/webvtt1/) | transcripts that evidence cites, and caption tracks | follow |
+| [HTML track kinds](https://html.spec.whatwg.org/multipage/media.html#attr-track-kind) | a caption track's `kind` | follow (the four kinds) |
 | [BCP 47](https://www.rfc-editor.org/info/bcp47) | `language`, `locales`, search locales | follow |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | dates, validity windows, `datePackaged` | follow |
 | [SPDX licence expressions](https://spdx.org/licenses/) | `license`, and a node's licence in citation records | follow (exposed as written) |
