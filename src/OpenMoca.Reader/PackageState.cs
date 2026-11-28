@@ -95,59 +95,38 @@ public sealed partial record PackageState
         };
     }
 
-    /// <summary>Package-level relation effects (package spec §7.2) over a set of packages.</summary>
+    /// <summary>
+    /// This state with every trust-dependent field taken from a trust state (Reader contract §9.4): signers, relation
+    /// scopes, current reviews, the issued copy and the terms' authority. A host re-establishes trust with
+    /// <see cref="PackageTrust"/> after its trust root changes, and keeps this in place of the stored state.
+    /// </summary>
+    /// <exception cref="ArgumentException">The trust state is for another package digest.</exception>
+    public PackageState WithTrust(TrustState trust)
+    {
+        ArgumentNullException.ThrowIfNull(trust);
+        if (trust.Digest != Digest)
+        {
+            throw new ArgumentException($"the trust state is for {trust.Digest}, not {Digest}", nameof(trust));
+        }
+
+        return this with
+        {
+            Signers = [.. trust.Signers],
+            RelationScopes = [.. trust.RelationScopes],
+            Reviews = trust.Reviews.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<AttestedReview>)[.. kv.Value], StringComparer.Ordinal),
+            IssuedCopy = trust.IssuedCopy,
+            Terms = Terms is { } terms ? terms with { Authority = trust.TermsAuthority } : null,
+        };
+    }
+
+    /// <summary>
+    /// Package-level relation effects (package spec §7.2) over a set of packages. Linear in the packages and their
+    /// relations; a store search keeps the result in its <see cref="Search.StoreIndex"/> rather than building it per search.
+    /// </summary>
     public static RelationIndex RelationIndexOf(IReadOnlyList<PackageState> packages, bool allowUnsignedRelations)
     {
-        var superseded = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var contested = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        static void Push(Dictionary<string, List<string>> map, string key, string value)
-        {
-            if (!map.TryGetValue(key, out var list))
-            {
-                list = [];
-                map[key] = list;
-            }
-
-            if (!list.Contains(value))
-            {
-                list.Add(value);
-            }
-        }
-
-        foreach (var m in packages)
-        {
-            foreach (var relation in m.Relations.OfType<JsonObject>())
-            {
-                var targetId = JsonValues.StringOf(relation["target"]);
-
-                // Package spec §7.2: only relations a signer of the package may make take effect.
-                if (!allowUnsignedRelations && !TrustRoot.ScopeCovers(m.RelationScopes, targetId))
-                {
-                    continue;
-                }
-
-                var targetVersion = JsonValues.StringOf(relation["version"]);
-                var type = JsonValues.StringOf(relation["type"]);
-                foreach (var t in packages.Where(t => t.Id == targetId && (string.IsNullOrEmpty(targetVersion) || t.Version == targetVersion)))
-                {
-                    var key = $"{t.Id}@{t.Version}";
-                    var self = $"{m.Id}@{m.Version}";
-                    if (type == "supersedes")
-                    {
-                        Push(superseded, key, self);
-                    }
-
-                    if (type == "conflictsWith")
-                    {
-                        Push(contested, key, self);
-                        Push(contested, self, key);
-                    }
-                }
-            }
-        }
-
-        return new RelationIndex(superseded, contested);
+        ArgumentNullException.ThrowIfNull(packages);
+        return Search.StoreIndex.Build(packages.DistinctBy(p => p.Digest, StringComparer.Ordinal), allowUnsignedRelations).Relations;
     }
 
     [GeneratedRegex(@"\.[Mm][Dd]\z")]

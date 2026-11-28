@@ -88,6 +88,13 @@ public sealed class TrustRoot
         return (JsonValues.StringOf(entry["publicKey"]) ?? "", JsonValues.StringOf(entry["identity"]) ?? keyId);
     }
 
+    /// <summary>
+    /// When a key stops being trusted (attestations §6): its <c>expires</c>, or null when it has none or is not in the
+    /// trust root. A key whose <c>expires</c> does not parse is never trusted, so it has no expiry to report.
+    /// </summary>
+    public DateTimeOffset? Expires(string keyId) =>
+        _keys.TryGetValue(keyId, out var entry) && entry["expires"] is not null ? Dates.Parse(entry["expires"]) : null;
+
     /// <summary>The Sigstore identities trusted for a role.</summary>
     public IReadOnlyList<JsonObject> SigstoreIdentities(string role) =>
         ((Document["sigstore"] as JsonObject)?["identities"] as JsonArray ?? [])
