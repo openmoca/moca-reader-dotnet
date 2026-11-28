@@ -22,6 +22,7 @@ For moca-spec 0.8.0: content in more than one language.
   the default retrieval policy and the audience set keep, so a deprecated or ended translation is treated as a missing
   one. When a loaded node's representations differ in those steps, `locale` is applied in the gate, not pushed down
   (§9.5). Unit test in `SearchLanguageTests`.
+- **The terms gate's place** (contract §9.2 step 5.7): the spec now says what this Reader already did. Comments only.
 
 ### Added
 

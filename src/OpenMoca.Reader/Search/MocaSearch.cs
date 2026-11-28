@@ -13,8 +13,8 @@ namespace OpenMoca.Reader.Search;
 /// <summary>
 /// The Reader's search (Reader contract §9): ingress hook, backend, resolve hits into citation records,
 /// egress hook, then the gate. Backends and hooks only propose candidates; the gate (digest allowlist,
-/// default retrieval policy, audience, locale, concepts and scope) always runs last, so nothing either
-/// of them does can return content the policy excludes.
+/// default retrieval policy, audience, locale and edition groups, concepts and scope, upTo, then terms) always runs
+/// last, so nothing either of them does can return content the policy excludes.
 /// </summary>
 public sealed class MocaSearch
 {
@@ -668,7 +668,8 @@ public sealed class MocaSearch
                 continue;
             }
 
-            // Contract §9.2 step 5.3 and §15.4: with a terms request, the terms gate. Without one, terms remove nothing,
+            // Contract §9.2 step 5.7 and §15.4: with a terms request, the terms gate, after every other filter but one per
+            // span, so U004 counts only records the search would otherwise return. Without one, terms remove nothing,
             // and a record never carries terms a backend or hook gave it.
             var kept = record with { Terms = null };
             if (caller.Terms is { } request)
