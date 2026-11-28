@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using OpenMoca.Reader.Citations;
@@ -162,18 +163,26 @@ public sealed class StoreStatesTests
     public async Task Search_WhenTraced_RecordsEachLoadWithCountsAndNoContent()
     {
         var store = Synthetic.Store(100, hitPackages: 4);
-        var spans = new List<Activity>();
+        // The listener hears the Reader's spans from every test that runs at the same time, on other threads: collect
+        // them in a thread-safe queue, and keep only this search's, the spans in this test's own trace.
+        var spans = new ConcurrentQueue<Activity>();
+        using var testSource = new ActivitySource("OpenMoca.Reader.Tests.StoreStates");
         using var listener = new ActivityListener
         {
-            ShouldListenTo = s => s.Name == ReaderTelemetry.SourceName,
+            ShouldListenTo = s => s.Name == ReaderTelemetry.SourceName || s.Name == testSource.Name,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = spans.Add,
+            ActivityStopped = spans.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
-        await new MocaSearch(store.Source, () => Now, store.Backend).SearchAsync("q", new SearchOptions { Limit = 4 }, TestContext.Current.CancellationToken);
+        ActivityTraceId trace;
+        using (var parent = testSource.StartActivity("test"))
+        {
+            trace = parent!.TraceId;
+            await new MocaSearch(store.Source, () => Now, store.Backend).SearchAsync("q", new SearchOptions { Limit = 4 }, TestContext.Current.CancellationToken);
+        }
 
-        var load = Assert.Single(spans, s => s.OperationName == ReaderTelemetry.StateLoadSpan);
+        var load = Assert.Single(spans.ToArray(), s => s.TraceId == trace && s.OperationName == ReaderTelemetry.StateLoadSpan);
         Assert.Equal(4, load.GetTagItem("moca.states.requested"));
         Assert.Equal(4, load.GetTagItem("moca.states.loaded"));
         Assert.Equal(0, load.GetTagItem("moca.states.missing"));
