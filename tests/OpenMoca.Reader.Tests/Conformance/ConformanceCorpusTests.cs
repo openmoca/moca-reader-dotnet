@@ -141,6 +141,16 @@ public sealed class ConformanceCorpusTests
             problems.Add($"expected {count} result(s), got {records.Count}");
         }
 
+        // Contract §9, localeMode first: these results come in this order (others may come between them).
+        if (e["order"] is JsonArray order)
+        {
+            var at = order.Select(k => records.FindIndex(r => JsonValues.StringOf(r["node"]!["ref"]) == JsonValues.StringOf(k))).ToList();
+            if (at.Where((i, n) => i < 0 || (n > 0 && i < at[n - 1])).Any())
+            {
+                problems.Add($"order: expected {string.Join(", ", order.Select(JsonValues.StringOf))}, got {string.Join(", ", records.Select(r => JsonValues.StringOf(r["node"]!["ref"])))}");
+            }
+        }
+
         foreach (var (k, locale) in e["locales"] as JsonObject ?? [])
         {
             var got = records.Where(r => JsonValues.StringOf(r["node"]!["ref"]) == k).Select(r => JsonValues.StringOf(r["node"]!["locale"])).ToList();

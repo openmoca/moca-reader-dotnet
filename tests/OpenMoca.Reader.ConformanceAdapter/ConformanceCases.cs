@@ -287,6 +287,7 @@ public static class ConformanceCases
             IncludeAll = search["includeAll"] is JsonValue ia && ia.TryGetValue<bool>(out var iab) && iab,
             // Package spec §5.4: a tag or a priority list.
             Locale = LocaleOf(search["locale"]),
+            LocaleMode = Str(search["localeMode"]) switch { "first" => LocaleMode.First, "only" => LocaleMode.Only, _ => LocaleMode.Choose },
             Editions = Str(search["editions"]) == "all" ? EditionsMode.All : EditionsMode.Choose,
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),

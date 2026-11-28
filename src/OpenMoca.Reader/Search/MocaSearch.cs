@@ -225,7 +225,11 @@ public sealed class MocaSearch
             // Counted afresh each round: the last round's count is the one reported.
             var excluded = caller.Terms is not null ? new TermsCount() : null;
             var passed = Gate(candidates, caller, loaded, view, composition, resolver, excluded, eligible);
-            var done = passed.Count >= caller.Limit || hits.Count < size;
+            // Contract §9.2, "Language first": with localeMode first, limit records of the first group, or no more hits.
+            var enough = caller.Locale is not null && caller.LocaleMode == LocaleMode.First
+                ? passed.Count(r => LocaleGroup(r, caller.Locale) == 0) >= caller.Limit
+                : passed.Count >= caller.Limit;
+            var done = enough || hits.Count < size;
             var truncated = !done && _maxCandidates is { } max && size >= max;
             if (done || truncated)
             {
@@ -403,7 +407,8 @@ public sealed class MocaSearch
         // A store search loads its composers' states with its hits, after this plan, so it cannot yet tell whether any
         // folds editions: with a locale it asks for more, as when one does.
         var folds = request.Locale is not null && request.Editions != EditionsMode.All && (_library is null || composition.HasSlots);
-        var first = pushdown && !localeHeld && !folds && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
+        var moded = request.Locale is not null && request.LocaleMode != LocaleMode.Choose;
+        var first = pushdown && !localeHeld && !folds && !moded && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
             ? request.Limit
             : (int)Math.Min((long)request.Limit * _overfetch, int.MaxValue);
         return (Math.Max(1, _maxCandidates is { } max ? Math.Min(first, max) : first), filters);
@@ -639,6 +644,12 @@ public sealed class MocaSearch
                 continue;
             }
 
+            // Contract §9: localeMode only keeps records whose language matches an entry of the locale list.
+            if (caller.Locale is not null && caller.LocaleMode == LocaleMode.Only && LocaleGroup(record, caller.Locale) == caller.Locale.Count)
+            {
+                continue;
+            }
+
             if (wanted is not null && !composition.BoundTo(record, wanted))
             {
                 continue;
@@ -680,7 +691,27 @@ public sealed class MocaSearch
             records = records.OrderByDescending(r => r.Score ?? 0).ToList();
         }
 
+        // Contract §9: localeMode first orders by the first locale entry each record matches, stably within a group.
+        if (caller.Locale is { } locales && caller.LocaleMode == LocaleMode.First)
+        {
+            records = records.OrderBy(r => LocaleGroup(r, locales)).ToList();
+        }
+
         return records;
+    }
+
+    /// <summary>Contract §9: the index of the first locale entry a record's language matches, or the list's length for none.</summary>
+    private static int LocaleGroup(CitationRecord record, IReadOnlyList<string> locales)
+    {
+        for (var i = 0; i < locales.Count; i++)
+        {
+            if (LocaleLookup.Matches(record.Node.Locale, [locales[i]]))
+            {
+                return i;
+            }
+        }
+
+        return locales.Count;
     }
 
     /// <summary>

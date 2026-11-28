@@ -71,6 +71,9 @@ string? chosen = library.Structure.ChooseEdition("https://example.com/course#bre
   file's, so it is found by topic and retired with the original.
 - A search chooses only among the representations it may return, so a retired
   translation falls back as a missing one does.
+- `LocaleMode.Only` leaves out records in no language of the list (a node
+  with no French file drops out of a French search); `LocaleMode.First` puts
+  records in the first language first, then the next, and leaves nothing out.
 - With a locale, a search keeps one edition per slot
   (`Editions = EditionsMode.All` keeps every one), but only where the
   composite's signers speak for the edition's package, or the library allows

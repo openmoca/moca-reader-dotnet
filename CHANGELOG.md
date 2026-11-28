@@ -35,6 +35,9 @@ For moca-spec 0.8.0: content in more than one language.
   `language` and the slots (`CompositionMember.Language`, `CompositionState.Slots`). Structure operations
   `Editions(slot)` (`EditionItem`) and `ChooseEdition(slot, locale)`; `Editions.Choose`. Unit tests in
   `EditionTests`.
+- **`SearchOptions.LocaleMode`** (contract §9): `Choose` (the default), `Only` (records in another language drop out,
+  in the gate) and `First` (records ordered by the first locale entry they match, then the next; the search asks
+  again until `Limit` records of the first group pass). Unit test in `SearchLanguageTests`.
 
 ## Unreleased: 0.8.0
 

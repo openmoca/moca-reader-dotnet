@@ -137,6 +137,13 @@ public sealed record SearchOptions
     public IReadOnlyList<string>? Locale { get; init; }
 
     /// <summary>
+    /// What the locale does (Reader contract §9); no effect without one. <see cref="LocaleMode.Choose"/> (the default)
+    /// chooses each node's representation; <see cref="LocaleMode.Only"/> also leaves out records in no language of the
+    /// list; <see cref="LocaleMode.First"/> orders records by the first entry of the list they match.
+    /// </summary>
+    public LocaleMode LocaleMode { get; init; }
+
+    /// <summary>
     /// With a locale, whether a composite package's edition groups keep one edition per slot (<see
     /// cref="EditionsMode.Choose"/>, the default) or every edition (<see cref="EditionsMode.All"/>) (package spec §7.4,
     /// Reader contract §9). Without a locale it has no effect.
@@ -161,6 +168,22 @@ public sealed record SearchOptions
     /// caller only; a hook never changes it.
     /// </summary>
     public TermsRequest? Terms { get; init; }
+}
+
+/// <summary>What a search's locale does (Reader contract §9).</summary>
+public enum LocaleMode
+{
+    /// <summary>For each node, the representation the locale selects. Nothing is left out or reordered. The default.</summary>
+    Choose,
+
+    /// <summary>
+    /// As <see cref="Choose"/>, then records are ordered by the first entry of the locale list their language matches,
+    /// then the next, then records that match none; each group keeps the order it would otherwise have.
+    /// </summary>
+    First,
+
+    /// <summary>As <see cref="Choose"/>, then only records whose language matches an entry of the locale list pass.</summary>
+    Only,
 }
 
 /// <summary>What a search does with a composite package's edition groups when it has a locale (Reader contract §9).</summary>
