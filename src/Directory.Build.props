@@ -5,7 +5,7 @@
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
   <PropertyGroup>
-    <Version>0.7.0</Version>
+    <Version>0.8.0-preview.1</Version>
     <Authors>MOCA Standard Contributors</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/openmoca/moca-reader-dotnet</PackageProjectUrl>

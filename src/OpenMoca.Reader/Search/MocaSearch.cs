@@ -19,9 +19,7 @@ public sealed class MocaSearch
 {
     private readonly bool _allowUnsigned;
     private readonly Library? _library;
-    private readonly HashSet<string>? _allowed;
-    private readonly Dictionary<string, PackageState>? _states;
-    private readonly RelationIndex? _storeIndex;
+    private readonly IPackageStateSource? _source;
     private readonly Func<DateTimeOffset> _clock;
     private readonly ISearchBackend _backend;
     private readonly IReadOnlyList<string>? _audiences;
@@ -48,13 +46,30 @@ public sealed class MocaSearch
     /// package is among <paramref name="packages"/> are returned, with every library- and trust-dependent field recomputed from their states (contract §9.4).
     /// </summary>
     public MocaSearch(IEnumerable<PackageState> packages, Func<DateTimeOffset> clock, ISearchBackend backend, IReadOnlyList<string>? audiences = null, SearchHooks? hooks = null, int overfetch = 3, bool allowUnsignedRelations = false)
+        : this(new MemoryPackageStates(packages, allowUnsignedRelations), clock, backend, audiences, hooks, overfetch)
     {
+    }
+
+    /// <summary>
+    /// A search over a store backend with package states supplied on demand (Reader contract §9.4): each call asks
+    /// <paramref name="states"/> only for the states of the packages its candidates come from, the packages that compose
+    /// them and, with a terms request, the packages their records name. Relation effects, composers and reading orders
+    /// across the whole store come from the source's cached <see cref="IPackageStateSource.Index"/>. Results are the same
+    /// as with every state in memory.
+    /// </summary>
+    /// <param name="states">The host's states, allowlist and index. Relations from unsigned packages take effect as its index says.</param>
+    /// <param name="clock">The clock.</param>
+    /// <param name="backend">The store backend.</param>
+    /// <param name="audiences">The host's audience filter; null for none.</param>
+    /// <param name="hooks">Retrieval hooks.</param>
+    /// <param name="overfetch">How many times the limit to ask for when the gate may drop hits.</param>
+    public MocaSearch(IPackageStateSource states, Func<DateTimeOffset> clock, ISearchBackend backend, IReadOnlyList<string>? audiences = null, SearchHooks? hooks = null, int overfetch = 3)
+    {
+        ArgumentNullException.ThrowIfNull(states);
         // Contract §9.4: the host's package states, so every library- and trust-dependent field of a stored record
         // is recomputed at query time.
-        _states = packages.ToDictionary(p => p.Digest, StringComparer.Ordinal);
-        _allowed = [.. _states.Keys];
-        _storeIndex = PackageState.RelationIndexOf([.. _states.Values], allowUnsignedRelations);
-        _allowUnsigned = allowUnsignedRelations;
+        _source = states;
+        _allowUnsigned = states.Index.AllowUnsignedRelations;
         _clock = clock;
         _backend = backend;
         _audiences = audiences?.ToList();
@@ -121,9 +136,16 @@ public sealed class MocaSearch
     public async Task<IReadOnlyList<CitationRecord>> SearchAsync(string query, SearchOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new SearchOptions();
+        // A host's candidate pool is a limit in the range its advanced layer uses.
+        if (options.Pool is { } pool)
+        {
+            options = options with { Limit = pool };
+        }
+
         var now = _clock();
-        var index = _library?.Relations() ?? RelationIndex.Empty;
+        var index = _library?.Relations() ?? _source!.Index.Relations;
         var loaded = Loaded();
+        var view = _source is not null ? new StoreView(_source) : null;
         // The caller's concepts and scope bind the gate. Ingress may narrow what the backend searches,
         // but can never widen what the caller asked for.
         var caller = options with { Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null };
@@ -131,8 +153,10 @@ public sealed class MocaSearch
         // Contract §9: an upTo that no loaded reading order places limits nothing, and never silently.
         if (caller.UpTo is { } upTo)
         {
-            IEnumerable<string> digests = _library is not null ? loaded.Keys : _states!.Keys;
-            if (!digests.Any(d => ReadingOrderOf(d, loaded)?.Positions.ContainsKey(upTo) == true))
+            var placed = _library is not null
+                ? loaded.Keys.Any(d => ReadingOrderOf(d, loaded, null)?.Positions.ContainsKey(upTo) == true)
+                : _source!.Index.Places(upTo);
+            if (!placed)
             {
                 findings.Add(DiagnosticCodes.S008UpToUnresolved, $"upTo {upTo} is on no loaded package's reading order; it limits nothing");
             }
@@ -140,7 +164,7 @@ public sealed class MocaSearch
 
         Diagnostics = findings.Items;
         // Package spec §5.6: what each loaded composing package binds its members to.
-        var composition = CompositionOf(loaded);
+        var composition = CompositionOf(loaded, view);
         var request = caller;
         var hookContext = new HookContext(request, _library, Structure, _audiences, now);
         var effectiveQuery = query;
@@ -157,22 +181,42 @@ public sealed class MocaSearch
 
         var (fetch, filters) = Plan(request, caller, now, index, loaded, composition);
         // Contract §15.3–15.4: each node's resolved terms, and which packages are closed or hidden for the request.
-        var resolver = caller.Terms is { } termsRequest ? ResolverFor(termsRequest, composition) : null;
+        var resolver = caller.Terms is { } termsRequest ? ResolverFor(termsRequest, composition, view) : null;
         // Contract §9.2, "Filters come before the limit": ask again, for more each time, until limit records pass the
         // gate or the backend has no more.
         for (var size = fetch; ; size = Next(size))
         {
             var hits = await _backend.SearchAsync(effectiveQuery, size, filters, cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<CitationRecord> candidates = Narrow(Resolve(hits, now, index, loaded), request, caller, composition);
+            // Contract §9.4: a store search loads the states of the hits' packages and of the packages composing them.
+            var grew = view is not null && await view.EnsureAsync(hits.Select(h => h.Digest), cancellationToken).ConfigureAwait(false);
+            if (grew)
+            {
+                composition = CompositionOf(loaded, view);
+            }
+
+            IReadOnlyList<CitationRecord> candidates = Narrow(Resolve(hits, now, index, loaded, view), request, caller, composition);
             if (_hooks.Egress is not null)
             {
                 var tagged = candidates.Select(r => r with { Retrieval = new CitationRetrieval("search") }).ToList();
                 candidates = await _hooks.Egress(tagged, hookContext with { Request = request }, cancellationToken).ConfigureAwait(false);
             }
 
+            // Records an egress hook added, and, with a terms request, the packages records name (for "Nothing names a
+            // hidden package", §15.4), need their states too.
+            if (view is not null && await view.EnsureForRecordsAsync(candidates, caller.Terms is not null, cancellationToken).ConfigureAwait(false))
+            {
+                grew = true;
+                composition = CompositionOf(loaded, view);
+            }
+
+            if (grew && caller.Terms is { } roundTerms)
+            {
+                resolver = ResolverFor(roundTerms, composition, view);
+            }
+
             // Counted afresh each round: the last round's count is the one reported.
             var excluded = caller.Terms is not null ? new TermsCount() : null;
-            var passed = Gate(candidates, caller, loaded, composition, resolver, excluded);
+            var passed = Gate(candidates, caller, loaded, view, composition, resolver, excluded);
             var done = passed.Count >= caller.Limit || hits.Count < size;
             var truncated = !done && _maxCandidates is { } max && size >= max;
             if (done || truncated)
@@ -185,6 +229,7 @@ public sealed class MocaSearch
                 // Contract §15.4: the records the terms gate removed, by reason, and how many were from hidden packages.
                 excluded?.Report(findings, "records");
 
+                view?.Report();
                 Diagnostics = findings.Items;
                 return truncated ? passed : passed.Take(caller.Limit).ToList();
             }
@@ -201,19 +246,58 @@ public sealed class MocaSearch
     /// </summary>
     /// <param name="records">Citation records from this search's library or packages.</param>
     /// <param name="request">The host's terms request.</param>
+    /// <exception cref="InvalidOperationException">The search's states come from a host's own <see cref="IPackageStateSource"/>, which may need to wait: use <see cref="ApplyTermsAsync"/>.</exception>
     public IReadOnlyList<CitationRecord> ApplyTerms(IEnumerable<CitationRecord> records, TermsRequest request)
     {
         ArgumentNullException.ThrowIfNull(records);
         ArgumentNullException.ThrowIfNull(request);
+        var list = records.ToList();
+        StoreView? view = null;
+        if (_source is not null)
+        {
+            if (_source is not MemoryPackageStates memory)
+            {
+                throw new InvalidOperationException("this search loads package states on demand: use ApplyTermsAsync");
+            }
+
+            view = new StoreView(memory);
+            view.EnsureForRecordsAsync(list, true, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }
+
+        return ApplyTermsTo(list, request, view);
+    }
+
+    /// <summary>
+    /// As <see cref="ApplyTerms"/>, loading the states it needs from the search's <see cref="IPackageStateSource"/>:
+    /// the records' packages, the packages composing them and the packages their records name.
+    /// </summary>
+    /// <param name="records">Citation records from this search's library or packages.</param>
+    /// <param name="request">The host's terms request.</param>
+    /// <param name="cancellationToken">Cancels loading states.</param>
+    public async Task<IReadOnlyList<CitationRecord>> ApplyTermsAsync(IEnumerable<CitationRecord> records, TermsRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(request);
+        var list = records.ToList();
+        var view = _source is not null ? new StoreView(_source) : null;
+        if (view is not null)
+        {
+            await view.EnsureForRecordsAsync(list, true, cancellationToken).ConfigureAwait(false);
+        }
+
+        return ApplyTermsTo(list, request, view);
+    }
+
+    private List<CitationRecord> ApplyTermsTo(List<CitationRecord> records, TermsRequest request, StoreView? view)
+    {
         var loaded = Loaded();
-        var composition = CompositionOf(loaded);
-        var allowed = _library is not null ? loaded.Keys.ToHashSet(StringComparer.Ordinal) : _allowed!;
-        var resolver = ResolverFor(request, composition);
+        var composition = CompositionOf(loaded, view);
+        var resolver = ResolverFor(request, composition, view);
         var excluded = new TermsCount();
         var kept = new List<CitationRecord>();
         foreach (var record in records)
         {
-            if (allowed.Contains(record.Package.Digest) && WithTerms(record, request, resolver, excluded) is { } termed)
+            if (Allowed(record.Package.Digest, loaded) && WithTerms(record, request, resolver, excluded) is { } termed)
             {
                 kept.Add(termed);
             }
@@ -221,22 +305,26 @@ public sealed class MocaSearch
 
         var findings = new DiagnosticBag();
         excluded.Report(findings, "records");
+        view?.Report();
         Diagnostics = findings.Items;
         return kept;
     }
 
-    private TermsResolver ResolverFor(TermsRequest request, CompositionIndex composition) =>
+    private bool Allowed(string digest, Dictionary<string, PackageResult> loaded) =>
+        _library is not null ? loaded.ContainsKey(digest) : _source!.Contains(digest);
+
+    private TermsResolver ResolverFor(TermsRequest request, CompositionIndex composition, StoreView? view) =>
         _library is not null
             ? TermsResolver.For(_library, _termsLimits, request)
-            : TermsResolver.For(_states!.Values, composition, _allowUnsigned, _termsLimits, request);
+            : TermsResolver.For(view!.Ordered, composition, _allowUnsigned, _termsLimits, request);
 
     private Dictionary<string, PackageResult> Loaded() =>
         (_library?.Packages ?? []).ToDictionary(p => p.Result.Digest!, p => p.Result, StringComparer.Ordinal);
 
-    private CompositionIndex CompositionOf(Dictionary<string, PackageResult> loaded) =>
+    private CompositionIndex CompositionOf(Dictionary<string, PackageResult> loaded, StoreView? view) =>
         new(_library is not null
             ? loaded.Values.Select(r => (r.Digest!, Composition.Of(r)))
-            : _states!.Values.Select(s => (s.Digest, s.Composition)));
+            : view!.Ordered.Select(s => (s.Digest, s.Composition)));
 
     /// <summary>
     /// Reader contract §9.2, "Ingress narrowing": concepts or a scope an ingress hook set keep only records bound to them,
@@ -268,7 +356,8 @@ public sealed class MocaSearch
     private (int Fetch, SearchFilters Filters) Plan(SearchOptions request, SearchOptions caller, DateTimeOffset now, RelationIndex index,
         Dictionary<string, PackageResult> loaded, CompositionIndex composition)
     {
-        var composed = composition.HasBindings;
+        // Contract §9.5: for a store search, whether any package in the store binds members, from the cached index.
+        var composed = _library is not null ? composition.HasBindings : _source!.Index.HasBindings;
         var exclude = new List<ExcludedNode>();
         if (!request.IncludeAll && _library is not null)
         {
@@ -286,7 +375,8 @@ public sealed class MocaSearch
         }
 
         var concepts = ConceptsFor(request);
-        var digests = _library is not null ? _library.Packages.Select(p => p.Result.Digest!).ToList() : [.. _allowed!];
+        // The store's allowlist is the host's own list, handed on as it is, never copied.
+        var digests = _library is not null ? _library.Packages.Select(p => p.Result.Digest!).ToList() : _source!.Digests;
         // Contract §9.5: a record bound by composition carries none of those concepts itself, so the filter is left to
         // the gate when any loaded package binds members.
         var filters = new SearchFilters(digests, exclude, _audiences, request.Locale, composed ? null : concepts, _allowUnlabelled)
@@ -349,7 +439,7 @@ public sealed class MocaSearch
                 return false;
             }
 
-            return upTo is null || PassesUpTo(record, upTo, loaded, composition, late);
+            return upTo is null || PassesUpTo(record, upTo, loaded, null, composition, late);
         };
     }
 
@@ -371,10 +461,10 @@ public sealed class MocaSearch
     /// Contract §9: the record's own package limits it by the node's own concepts; each loaded package that composes it
     /// and whose reading order places upTo limits it by the node's own concepts and the concepts it binds it to.
     /// </summary>
-    private bool PassesUpTo(CitationRecord record, string upTo, Dictionary<string, PackageResult> loaded,
+    private bool PassesUpTo(CitationRecord record, string upTo, Dictionary<string, PackageResult> loaded, StoreView? view,
         CompositionIndex composition, Dictionary<string, (ReadingOrder Order, HashSet<string> Late)?> late)
     {
-        if (!ReadingOrder.Passes(record, ReadingOrderOf(record.Package.Digest, loaded), upTo))
+        if (!ReadingOrder.Passes(record, ReadingOrderOf(record.Package.Digest, loaded, view), upTo))
         {
             return false;
         }
@@ -385,14 +475,14 @@ public sealed class MocaSearch
         {
             // Contract §9, Members: a composer limits a member only when its signers speak for the member (as for
             // relations, R004), or the host allows unsigned packages to.
-            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded), record.Package.Id))
+            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded, view), record.Package.Id))
             {
                 continue;
             }
 
             if (!late.TryGetValue(composer.Digest, out var entry))
             {
-                var order = ReadingOrderOf(composer.Digest, loaded);
+                var order = ReadingOrderOf(composer.Digest, loaded, view);
                 entry = order is not null && order.Positions.TryGetValue(upTo, out var limit)
                     ? (order, order.Positions.Where(kv => kv.Value > limit).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal))
                     : null;
@@ -413,24 +503,24 @@ public sealed class MocaSearch
         return true;
     }
 
-    private IReadOnlyList<string> RelationScopesOf(string digest, Dictionary<string, PackageResult> loaded) =>
+    private IReadOnlyList<string> RelationScopesOf(string digest, Dictionary<string, PackageResult> loaded, StoreView? view) =>
         _library is not null
             ? loaded.GetValueOrDefault(digest)?.RelationScopes ?? []
-            : _states!.GetValueOrDefault(digest)?.RelationScopes ?? [];
+            : view!.States.GetValueOrDefault(digest)?.RelationScopes ?? [];
 
-    private ReadingOrder? ReadingOrderOf(string digest, Dictionary<string, PackageResult> loaded) =>
+    private ReadingOrder? ReadingOrderOf(string digest, Dictionary<string, PackageResult> loaded, StoreView? view) =>
         _library is not null
             ? loaded.GetValueOrDefault(digest)?.ResolvedReadingOrder
-            : _states!.GetValueOrDefault(digest)?.ReadingOrder;
+            : view!.States.GetValueOrDefault(digest)?.ReadingOrder;
 
-    private List<CitationRecord> Resolve(IReadOnlyList<SearchHit> hits, DateTimeOffset now, RelationIndex index, Dictionary<string, PackageResult> loaded)
+    private List<CitationRecord> Resolve(IReadOnlyList<SearchHit> hits, DateTimeOffset now, RelationIndex index, Dictionary<string, PackageResult> loaded, StoreView? view)
     {
         var records = new List<CitationRecord>();
         foreach (var hit in hits)
         {
             if (hit.Record is not null)
             {
-                var refreshed = _library is not null ? RefreshClock(hit.Record, now) : PackageState.Refresh(hit.Record, now, _states!, _storeIndex!);
+                var refreshed = _library is not null ? RefreshClock(hit.Record, now) : PackageState.Refresh(hit.Record, now, view!.States, index);
                 if (refreshed is not null)
                 {
                     records.Add(refreshed with { Score = hit.Score });
@@ -473,17 +563,16 @@ public sealed class MocaSearch
     /// best first; the caller keeps the limit.
     /// </summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
-        CompositionIndex composition, TermsResolver? resolver, TermsCount? excluded)
+        StoreView? view, CompositionIndex composition, TermsResolver? resolver, TermsCount? excluded)
     {
         var concepts = ConceptsFor(caller);
         var wanted = concepts is null ? null : concepts.ToHashSet(StringComparer.Ordinal);
         var late = new Dictionary<string, (ReadingOrder Order, HashSet<string> Late)?>(StringComparer.Ordinal);
-        var allowed = _library is not null ? loaded.Keys.ToHashSet(StringComparer.Ordinal) : _allowed!;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var records = new List<CitationRecord>();
         foreach (var record in candidates)
         {
-            if (!allowed.Contains(record.Package.Digest))
+            if (!Allowed(record.Package.Digest, loaded))
             {
                 continue;
             }
@@ -509,7 +598,7 @@ public sealed class MocaSearch
             }
 
             // Contract §9.2 step 6: upTo follows the caller; an ingress hook never changes it.
-            if (caller.UpTo is { } upTo && !PassesUpTo(record, upTo, loaded, composition, late))
+            if (caller.UpTo is { } upTo && !PassesUpTo(record, upTo, loaded, view, composition, late))
             {
                 continue;
             }
@@ -612,5 +701,103 @@ public sealed class MocaSearch
         }
 
         return Encoding.UTF8.GetString(body, (int)from, (int)(to - from));
+    }
+
+    /// <summary>
+    /// The package states one store search call has loaded (Reader contract §9.4), from the host's source: only those
+    /// its candidates need. Ordered as the source's index, so composers and terms resolve as with every state in memory.
+    /// </summary>
+    private sealed class StoreView(IPackageStateSource source)
+    {
+        private readonly HashSet<string> _asked = new(StringComparer.Ordinal);
+        private int _loads;
+        private int _requested;
+        private TimeSpan _elapsed;
+
+        public Dictionary<string, PackageState> States { get; } = new(StringComparer.Ordinal);
+
+        public IEnumerable<PackageState> Ordered => States.Values.OrderBy(s => source.Index.OrderOf(s.Digest));
+
+        /// <summary>Loads the states of these packages and of the packages composing them; true when any was new.</summary>
+        public async ValueTask<bool> EnsureAsync(IEnumerable<string> digests, CancellationToken cancellationToken)
+        {
+            var wanted = new List<string>();
+            foreach (var digest in digests)
+            {
+                Want(digest, wanted);
+                foreach (var composer in source.Index.ComposersOf(digest))
+                {
+                    Want(composer, wanted);
+                }
+            }
+
+            if (wanted.Count == 0)
+            {
+                return false;
+            }
+
+            using var activity = ReaderTelemetry.Source.StartActivity(ReaderTelemetry.StateLoadSpan);
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var states = await source.LoadAsync(wanted, cancellationToken).ConfigureAwait(false);
+            var asked = wanted.ToHashSet(StringComparer.Ordinal);
+            var added = 0;
+            foreach (var state in states)
+            {
+                // Only what was asked for, and only from the allowlist: a source can never widen a search.
+                if (state is not null && asked.Contains(state.Digest) && States.TryAdd(state.Digest, state))
+                {
+                    added++;
+                }
+            }
+
+            _elapsed += System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            _loads++;
+            _requested += wanted.Count;
+            activity?.SetTag("moca.states.requested", wanted.Count);
+            activity?.SetTag("moca.states.loaded", added);
+            activity?.SetTag("moca.states.missing", wanted.Count - added);
+            activity?.SetTag("moca.store.packages", source.Index.Count);
+            return added > 0;
+        }
+
+        /// <summary>
+        /// Loads the states for records: their packages and their composers; with a terms request, also the packages
+        /// named in <c>supersededBy</c> and <c>contestedBy</c>, and their composers (Reader contract §15.4).
+        /// </summary>
+        public async ValueTask<bool> EnsureForRecordsAsync(IReadOnlyList<CitationRecord> records, bool named, CancellationToken cancellationToken)
+        {
+            var grew = await EnsureAsync(records.Select(r => r.Package.Digest), cancellationToken).ConfigureAwait(false);
+            if (!named)
+            {
+                return grew;
+            }
+
+            var references = records
+                .SelectMany(r => (r.Trust.SupersededBy ?? []).Concat(r.Trust.ContestedBy ?? []))
+                .Distinct(StringComparer.Ordinal)
+                .SelectMany(source.Index.DigestsNamed)
+                .ToList();
+            return await EnsureAsync(references, cancellationToken).ConfigureAwait(false) || grew;
+        }
+
+        /// <summary>Records the call's totals on the current span, if any: loads, states asked for and loaded, time spent.</summary>
+        public void Report()
+        {
+            if (System.Diagnostics.Activity.Current is { } activity)
+            {
+                activity.SetTag("moca.states.loads", _loads);
+                activity.SetTag("moca.states.requested", _requested);
+                activity.SetTag("moca.states.held", States.Count);
+                activity.SetTag("moca.states.load_ms", _elapsed.TotalMilliseconds);
+            }
+        }
+
+        private void Want(string digest, List<string> wanted)
+        {
+            if (_asked.Add(digest) && source.Contains(digest))
+            {
+                wanted.Add(digest);
+            }
+        }
     }
 }

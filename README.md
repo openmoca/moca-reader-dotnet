@@ -211,6 +211,61 @@ ingest again with a request (or call `RemoveAsync` for the closed packages).
 Without a request, ingest takes every unit, as before. `DenseBackend` embeds
 only the person's query, never package text.
 
+## Stores that keep packages broken apart
+
+Three calls, new in 0.8.0, for a host whose store keeps packages as parts
+(manifest, file digests, attestation files, records) rather than as packages.
+
+**Trust from what the store keeps: `PackageTrust.Evaluate`.** Give it the
+manifest's bytes, every file's SHA-256, the attestation files, a trust root
+and a time. It runs the same checks as opening the package, in the same code,
+and returns the same signers, keys, reviews, issued copy, relation scopes and
+diagnostics (with the reason for any attestation that does not count), plus
+the window the state holds for: `TrustedFrom` (the package's own `validFrom`)
+and `TrustedUntil` (the earliest of the package's `validUntil` and the expiry
+of each key behind a valid attestation). It needs no file contents. Use it
+when your trust root changes, such as a key removed before its expiry, and to
+store trust as dated fields you can filter on.
+
+```csharp
+var trust = PackageTrust.Evaluate(manifestBytes, fileDigests, attestationFiles, trustRoot, DateTimeOffset.UtcNow);
+// trust.Signed, trust.Signers, trust.Keys (each with Expires), trust.Diagnostics, trust.TrustedUntil
+var state = storedState.WithTrust(trust);   // the package state a store search uses, re-established
+```
+
+Inputs that do not describe one package (a manifest whose bytes do not match
+its digest, a path in the wrong map) are your store's error and throw
+`ArgumentException`; what the package itself holds never throws.
+
+**Package states on demand: `IPackageStateSource`.** `new MocaSearch(states,
+clock, backend)` with your own source asks only for the states a search needs:
+the packages its candidates come from, the packages composing them, and, with
+a terms request, the packages their records name. What a search needs about
+the whole store (relation effects, who composes whom, the concepts on reading
+orders) comes from a `StoreIndex` you build once with `StoreIndex.Build` and
+rebuild when a state changes. Results are the same as with every state in
+memory. Memory per search does not grow with the store: over synthetic stores
+of 1,000 and 10,000 packages, a search allocates the same. Use it once your
+store is too large to keep every state in memory; `MemoryPackageStates` is the
+in-memory source, shared between searches. With a source of your own, call
+`ApplyTermsAsync` rather than `ApplyTerms`.
+
+**A candidate pool: `SearchOptions.Pool`.** From 200 to 2,000 records that pass
+the gate, best first, for a layer of your own that fuses, groups or pages
+them. Every record is still the gate's; the default (no pool) is unchanged.
+Bound the asking again with `MaxCandidates`.
+
+```csharp
+var search = new MocaSearch(myStates, () => DateTimeOffset.UtcNow, store) { MaxCandidates = SearchOptions.MaxPool };
+var pool = await search.SearchAsync(query, new SearchOptions { Pool = 200 });
+```
+
+**Traces.** The Reader starts OpenTelemetry spans through .NET's
+`ActivitySource`, named `OpenMoca.Reader` (`ReaderTelemetry.SourceName`): add
+it to your tracer. `moca.reader.package_trust` carries attestation and signer
+counts; `moca.reader.package_states.load` carries the states asked for, loaded
+and missing, and the store's size. Spans never carry package content.
+
 ## Develop
 
 You need the .NET 10 SDK. The tests read moca-spec's examples and run its
@@ -280,6 +335,7 @@ mapping, in the specification.
 | [MARC relator codes](https://id.loc.gov/vocabulary/relators.html) | credit `roles` | follow (exposed as written) |
 | [schema.org](https://schema.org/) | `datePublished`, `contentRating`, `typicalAgeRange`, copyright | map to |
 | [ONNX](https://onnx.ai/) via ONNX Runtime | `OpenMoca.Reader.Onnx`: the standard embedding models | follow |
+| [OpenTelemetry](https://opentelemetry.io/docs/specs/otel/) traces, through .NET's `ActivitySource` | spans for the trust call and loading package states (`OpenMoca.Reader`); counts and durations, never content | follow |
 
 Built with the help of AI assistants; every change is reviewed and accepted by the maintainer.
 

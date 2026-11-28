@@ -3,6 +3,42 @@
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## Unreleased: 0.8.0
+
+Pre-release `0.8.0-preview.1`, from the `release-0.8.0` branch. Nothing here changes what a Reader must do (the Reader
+contract): each item is an addition to this Reader's API, and every existing call returns what it returned in 0.7.0.
+
+### Added
+
+- **`PackageTrust.Evaluate`** and **`TrustState`**: a package's trust state from its manifest bytes, file digests and
+  attestation files, under a trust root at a time (attestations §6–§7). The same code as opening the package, so the
+  same signers, relation scopes, reviews, issued copy, attestation records and diagnostics, for every package in the
+  conformance corpus (tested). With the keys behind each valid attestation (`TrustKey`, with `Expires`) and the window
+  the state holds for: `TrustedFrom` (the package's `validFrom`) and `TrustedUntil` (the earliest of its `validUntil`,
+  each such key's expiry, and the date of a review ignored as future-dated). `PackageState.WithTrust` puts it into a
+  stored package state.
+- **`IPackageStateSource`**, **`StoreIndex`** and **`MemoryPackageStates`** (Reader contract §9.4): a store search that
+  loads package states on demand, only for its candidates' packages, their composers and, with a terms request, the
+  packages their records name. The relation index, composers, bindings and reading-order concepts are built once into
+  the `StoreIndex` and kept. `new MocaSearch(IPackageStateSource, ...)`, and `MocaSearch.ApplyTermsAsync`.
+- **`SearchOptions.Pool`** (`MinPool` 200 to `MaxPool` 2,000): a candidate pool of gated records for a host's own
+  layer, in place of `Limit`.
+- **Traces**: `ReaderTelemetry.SourceName` (`OpenMoca.Reader`), with spans `moca.reader.package_trust` and
+  `moca.reader.package_states.load` (counts and durations, never content).
+- `AttestationRecord.KeyId`, `SignatureCheck.KeyId` and `TrustRoot.Expires(keyId)`.
+
+### Changed
+
+- **`PackageState.RelationIndexOf`** is linear in the packages and their relations (it compared every pair). Same
+  effects, in the same order (tested against the old scan).
+- **A store search over states in memory** (`new MocaSearch(IEnumerable<PackageState>, ...)`) now runs through
+  `MemoryPackageStates`: a search no longer copies the allowlist or walks every state for composition and terms. Over
+  10,000 synthetic packages, memory per search went from about 114 KB to 42 KB, the same as over 1,000; results are
+  identical to 0.7.0 on the whole corpus. A host that makes a `MocaSearch` per request can share one
+  `MemoryPackageStates` (or its own source), so the relation index is built once, not with every `MocaSearch`.
+- `MocaSearch.ApplyTerms` throws `InvalidOperationException` for a search made with a host's own
+  `IPackageStateSource` (use `ApplyTermsAsync`); with states in memory, or a library, it is unchanged.
+
 ## [0.7.0] - 2026-11-15
 
 For moca-spec 0.7.0 ([moca-spec#5](https://github.com/openmoca/moca-spec/issues/5) and

@@ -243,7 +243,7 @@ public static partial class MocaReader
 
         if (result.Digest is not null)
         {
-            ReadAttestations(result, bytes, options, diagnostics);
+            ReadAttestations(result, bytes, options, diagnostics, !diagnostics.Has(DiagnosticCodes.M002ManifestSchema));
         }
 
         // Attestations §8: a host can require a valid package attestation.
@@ -263,7 +263,12 @@ public static partial class MocaReader
         return Finish(result, diagnostics);
     }
 
-    private static void ReadAttestations(PackageResult result, Dictionary<string, byte[]> bytes, ReadOptions options, DiagnosticBag diagnostics)
+    /// <summary>
+    /// Attestations §7: checks every attestation file against the trust root, and records the signers, relation scopes,
+    /// reviews and issued copy on the result. It reads only the manifest, the digests and the attestation files, so the
+    /// trust call (<see cref="PackageTrust"/>) runs exactly this over what a store keeps.
+    /// </summary>
+    internal static void ReadAttestations(PackageResult result, IReadOnlyDictionary<string, byte[]> bytes, ReadOptions options, DiagnosticBag diagnostics, bool manifestValid)
     {
         var now = options.Clock();
         var attestationFiles = bytes.Keys
@@ -320,7 +325,7 @@ public static partial class MocaReader
                 continue;
             }
 
-            var check = IssuedCopies.Check(parsed.Statement, sig, result.Manifest!, result.Digest!, result.FileDigests, !diagnostics.Has(DiagnosticCodes.M002ManifestSchema));
+            var check = IssuedCopies.Check(parsed.Statement, sig, result.Manifest!, result.Digest!, result.FileDigests, manifestValid);
             if (check.Error is not null)
             {
                 Invalid(record, file, $"issued-copy attestation: {check.Error}", diagnostics);
@@ -412,6 +417,7 @@ public static partial class MocaReader
             {
                 record.Outcome = "ignored";
                 record.Reason = $"review is dated {JsonValues.StringOf(review.Predicate!["reviewedAt"])}, later than now";
+                record.CountsFrom = reviewedAt;
                 diagnostics.Add(DiagnosticCodes.A007ReviewDateFuture, record.Reason, file);
                 continue;
             }
@@ -478,6 +484,7 @@ public static partial class MocaReader
         record.Outcome = sig.Outcome;
         record.Signer = sig.Signer;
         record.Reason = sig.Reason;
+        record.KeyId = sig.Outcome == "valid" ? sig.KeyId : null;
         switch (sig.Outcome)
         {
             case "unverifiable":
@@ -507,7 +514,7 @@ public static partial class MocaReader
     }
 
     // Package spec §7.2: supersedes and conflictsWith take effect only when a signer may speak for the target.
-    private static void CheckRelationAuthority(PackageResult result, DiagnosticBag diagnostics)
+    internal static void CheckRelationAuthority(PackageResult result, DiagnosticBag diagnostics)
     {
         foreach (var relation in (result.Manifest?["relations"] as JsonArray ?? []).OfType<JsonObject>())
         {

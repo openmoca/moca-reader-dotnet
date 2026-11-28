@@ -35,6 +35,12 @@ public sealed class AttestationRecord
 
     /// <summary>Review files whose bytes have changed or been removed (A006).</summary>
     public IReadOnlyList<string> Outdated { get; set; } = [];
+
+    /// <summary>The trust-root key that verified a DSSE signature (attestations §6); null for Sigstore or when none did.</summary>
+    public string? KeyId { get; set; }
+
+    /// <summary>For a review ignored as dated later than the clock (A007): when it is dated, so when it would count.</summary>
+    internal DateTimeOffset? CountsFrom { get; set; }
 }
 
 /// <summary>A review that verified and matches a current file (citation record <c>attestedReviews</c>).</summary>
@@ -67,6 +73,9 @@ public sealed record SignatureCheck(
     /// id its <c>ids</c> cover (attestations §6, moca-spec ADR-0040); an entry without <c>ids</c> signs any id.
     /// </summary>
     public bool Scoped { get; init; }
+
+    /// <summary>The trust-root key that verified a DSSE signature; null for Sigstore or when it did not verify.</summary>
+    public string? KeyId { get; init; }
 }
 
 /// <summary>
@@ -198,6 +207,7 @@ public static class AttestationFormats
             return new("valid", key?.Identity ?? result.KeyId, null, trustRoot.Ids(result.KeyId!), trustRoot.Reviewers(result.KeyId!), key?.PublicKey)
             {
                 Scoped = trustRoot.HasIds(result.KeyId!),
+                KeyId = result.KeyId,
             };
         }
 

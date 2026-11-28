@@ -102,6 +102,28 @@ public sealed record SearchOptions
     /// <summary>Most records to return.</summary>
     public int Limit { get; init; } = 5;
 
+    /// <summary>The smallest candidate pool (<see cref="Pool"/>).</summary>
+    public const int MinPool = 200;
+
+    /// <summary>The largest candidate pool (<see cref="Pool"/>).</summary>
+    public const int MaxPool = 2000;
+
+    /// <summary>
+    /// A candidate pool for a host's own advanced layer, from <see cref="MinPool"/> to <see cref="MaxPool"/>: the search
+    /// returns up to this many records that passed the gate, best first, in place of <see cref="Limit"/>, for the host to
+    /// fuse, group or page itself. Every record is still the gate's (Reader contract §9.2); only how many differs. Null
+    /// (the default) uses <see cref="Limit"/>. Pair it with <see cref="MocaSearch.MaxCandidates"/> to bound the asking
+    /// again.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Outside 200 to 2,000.</exception>
+    public int? Pool
+    {
+        get;
+        init => field = value is null or (>= MinPool and <= MaxPool)
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(Pool), value, $"must be from {MinPool} to {MaxPool}");
+    }
+
     /// <summary>The host's opt-in to content the default retrieval policy excludes.</summary>
     public bool IncludeAll { get; init; }
 

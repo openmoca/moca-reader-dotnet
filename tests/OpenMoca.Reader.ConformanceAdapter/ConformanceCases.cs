@@ -20,6 +20,12 @@ public static class ConformanceCases
 {
     private const string UnloadedDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
+    /// <summary>
+    /// For tests: when set, a store search takes its package states from the source this makes (from the allowed states
+    /// and allowUnsignedRelations) instead of holding them in memory, as a host's own store would.
+    /// </summary>
+    public static AsyncLocal<Func<IEnumerable<PackageState>, bool, IPackageStateSource>?> StateSource { get; } = new();
+
     /// <summary>Runs one case and returns the adapter's JSON output.</summary>
     public static async Task<JsonObject> ActualForAsync(string root, JsonObject c, CancellationToken cancellationToken = default)
     {
@@ -322,7 +328,10 @@ public static class ConformanceCases
                 "ontology-guided" => OntologyGuided.Hooks(),
                 _ => null,
             };
-            var mocaSearch = new MocaSearch(allowed, () => now, store, audiences, storeHooks, allowUnsignedRelations: o["allowUnsignedRelations"]?.GetValue<bool>() == true)
+            var allowUnsigned = o["allowUnsignedRelations"]?.GetValue<bool>() == true;
+            // The public constructor over states in memory is the same search over a MemoryPackageStates.
+            var states = StateSource.Value is { } makeSource ? makeSource(allowed, allowUnsigned) : new MemoryPackageStates(allowed, allowUnsigned);
+            var mocaSearch = new MocaSearch(states, () => now, store, audiences, storeHooks)
             {
                 AllowUnlabelled = allowUnlabelled,
                 StructureSource = structure,
