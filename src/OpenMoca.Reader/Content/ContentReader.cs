@@ -296,7 +296,8 @@ internal static partial class ContentReader
             };
             if (!byKey.TryGetValue(key, out var node))
             {
-                node = new ContentNode { Path = key };
+                // Package spec §5.4: the default representation's tag in the lookup is the manifest's language.
+                node = new ContentNode { Path = key, Language = JsonValues.StringOf(manifest["language"]) is { Length: > 0 } language ? language : null };
                 byKey[key] = node;
             }
 

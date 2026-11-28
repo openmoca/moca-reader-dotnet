@@ -67,7 +67,7 @@ foreach (var sc in config["scenarios"]!.AsArray().Select(n => n!.AsObject()))
         search = new MocaSearch(library, backend, audiences, hooks);
     }
 
-    var options = new SearchOptions { Limit = limit, Locale = sc["locale"]?.GetValue<string>() };
+    var options = new SearchOptions { Limit = limit, Locale = sc["locale"]?.GetValue<string>() is { } locale ? [locale] : null };
     var queries = new JsonArray();
     foreach (var q in config["queries"]![sc["queries"]!.GetValue<string>()]!.AsArray().Select(x => x!.GetValue<string>()))
     {

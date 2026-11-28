@@ -2,6 +2,19 @@
 
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased: 0.8.0
+
+For moca-spec 0.8.0: content in more than one language.
+
+### Changed
+
+- **The locale lookup** (package spec §5.4): the default representation is tagged with the manifest's `language`,
+  and each truncation of the request also finds tags that start with it, so `pt-AO` finds `pt-BR` and `en` finds the
+  default file before `en-GB`. A new public class, `LocaleLookup` (`List`, `Lookup`, `Matches`,
+  `RepresentationTag`); `ContentNode` carries its default `Language`. Unit tests in `LocaleLookupTests`.
+- **`locale` is a priority list** (breaking): `SearchOptions.Locale`, `SearchFilters.Locale`, `Library.Citations`,
+  `Library.Get` and `StructureIndex.Nodes` take an `IReadOnlyList<string>` (`["fr-CA", "en"]`; one tag is a list of
+  one) instead of a string. The pushdown filter carries the list.
 
 ## Unreleased: 0.8.0
 

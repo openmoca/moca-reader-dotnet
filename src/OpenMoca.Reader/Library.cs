@@ -311,12 +311,17 @@ public sealed class Library
     public RelationIndex Relations() =>
         PackageState.RelationIndexOf([.. _packages.Select(p => PackageState.From(p.Result))], _allowUnsignedRelations);
 
-    /// <summary>Every node's citation record, one per node, in the requested locale.</summary>
-    public IReadOnlyList<CitationRecord> Citations(string? locale = null, bool includeText = false) =>
+    /// <summary>
+    /// Every node's citation record, one per node, in the representation the locale selects (package spec §5.4).
+    /// </summary>
+    /// <param name="locale">A priority list of language tags, most preferred first (<c>["fr-CA", "en"]</c>); null or
+    /// empty for each node's default representation.</param>
+    /// <param name="includeText">Whether records carry their text.</param>
+    public IReadOnlyList<CitationRecord> Citations(IReadOnlyList<string>? locale = null, bool includeText = false) =>
         Citations(locale, includeText, _packages);
 
     /// <summary>The citation records of some of the loaded packages, with relations among every loaded package.</summary>
-    internal IReadOnlyList<CitationRecord> Citations(string? locale, bool includeText, IReadOnlyList<LoadedPackage> packages)
+    internal IReadOnlyList<CitationRecord> Citations(IReadOnlyList<string>? locale, bool includeText, IReadOnlyList<LoadedPackage> packages)
     {
         var index = Relations();
         var now = Clock();
@@ -337,7 +342,10 @@ public sealed class Library
     /// Finds a node by its id (<c>&lt;package id&gt;#&lt;path&gt;</c>) or versioned reference
     /// (<c>&lt;package id&gt;@&lt;version&gt;#&lt;path&gt;</c>). An id matches the first loaded version.
     /// </summary>
-    public CitationRecord? Get(string nodeRef, string? locale = null, bool includeText = true)
+    /// <param name="nodeRef">The node id or versioned reference.</param>
+    /// <param name="locale">A priority list of language tags (package spec §5.4); null or empty for the default representation.</param>
+    /// <param name="includeText">Whether the record carries its text.</param>
+    public CitationRecord? Get(string nodeRef, IReadOnlyList<string>? locale = null, bool includeText = true)
     {
         var hash = nodeRef.LastIndexOf('#');
         if (hash < 0)

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
 using OpenMoca.Reader.Citations;
+using OpenMoca.Reader.Content;
 using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Structure;
 
@@ -148,7 +149,12 @@ public sealed class MocaSearch
         var view = _source is not null ? new StoreView(_source) : null;
         // The caller's concepts and scope bind the gate. Ingress may narrow what the backend searches,
         // but can never widen what the caller asked for.
-        var caller = options with { Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null };
+        // Package spec §5.4: a locale is a priority list; an empty one is no locale.
+        var caller = options with
+        {
+            Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null,
+            Locale = LocaleLookup.List(options.Locale) is { Count: > 0 } locales ? locales : null,
+        };
         var findings = new DiagnosticBag();
         // Contract §9: an upTo that no loaded reading order places limits nothing, and never silently.
         if (caller.UpTo is { } upTo)
@@ -657,19 +663,18 @@ public sealed class MocaSearch
         return resolver.WithoutHidden(record with { Terms = TermsRules.RecordTerms(authority, ai, rating, TermsRules.ResolveExport(terms, composites)) });
     }
 
-    private static bool LocaleOk(CitationRecord record, string locale, Dictionary<string, PackageResult> loaded)
+    private static bool LocaleOk(CitationRecord record, IReadOnlyList<string> locale, Dictionary<string, PackageResult> loaded)
     {
         loaded.TryGetValue(record.Package.Digest, out var result);
         var node = result?.Nodes.FirstOrDefault(n => n.Path == record.Node.Path);
+        // A store record has no node to choose within: it passes when its own language matches the request.
         if (node is null)
         {
-            var want = locale.ToLowerInvariant();
-            var have = (record.Node.Locale ?? "").ToLowerInvariant();
-            return have == want || want.StartsWith(have + "-", StringComparison.Ordinal) || have.StartsWith(want + "-", StringComparison.Ordinal);
+            return LocaleLookup.Matches(record.Node.Locale, locale);
         }
 
         var rep = Citations.Citations.PickRepresentation(node, locale);
-        return (rep.Locale ?? JsonValues.StringOf(result!.Manifest?["language"])) == record.Node.Locale;
+        return LocaleLookup.RepresentationTag(node, rep) == record.Node.Locale;
     }
 
     /// <summary>A stored record with its clock-dependent fields recomputed for now.</summary>

@@ -198,7 +198,7 @@ public sealed class StructureIndex
     /// of narrower, parts or both, to its descendants. The default retrieval policy applies unless
     /// <paramref name="includeAll"/>. Ordered by <c>node.ref</c>.
     /// </summary>
-    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", string? locale = null, bool includeAll = false)
+    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", IReadOnlyList<string>? locale = null, bool includeAll = false)
     {
         var wanted = new HashSet<string>(StringComparer.Ordinal) { iri };
         if (include != "none")

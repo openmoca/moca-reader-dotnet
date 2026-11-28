@@ -256,7 +256,13 @@ public static class ConformanceCases
         {
             Limit = (int)(JsonValues.IntegerOf(search["limit"]) ?? 50),
             IncludeAll = search["includeAll"] is JsonValue ia && ia.TryGetValue<bool>(out var iab) && iab,
-            Locale = Str(search["locale"]),
+            // Package spec §5.4: a tag or a priority list.
+            Locale = search["locale"] switch
+            {
+                JsonArray list => [.. list.Select(Str).OfType<string>()],
+                JsonValue one when Str(one) is { } tag => [tag],
+                _ => null,
+            },
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
             UpTo = Str(search["upTo"]),

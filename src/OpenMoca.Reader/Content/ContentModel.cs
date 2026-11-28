@@ -75,6 +75,12 @@ public sealed class ContentNode
     /// <summary>The node path relative to <c>content/</c> (the default-language file name), NFC.</summary>
     public required string Path { get; init; }
 
+    /// <summary>
+    /// The default representation's language (package spec §5.4): the manifest's <c>language</c>, or null when it has
+    /// none. Its tag in the locale lookup, and its records' <c>node.locale</c>.
+    /// </summary>
+    public string? Language { get; internal set; }
+
     /// <summary>Representations, default language first, then by locale.</summary>
     public List<Representation> Representations { get; } = [];
 }

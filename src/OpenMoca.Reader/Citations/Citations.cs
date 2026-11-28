@@ -29,22 +29,29 @@ public static class Citations
     public static bool PassesDefaultPolicy(CitationRecord record) =>
         record.Trust.InForce && !record.Trust.Superseded && record.Trust.Status != "deprecated";
 
-    /// <summary>The representation for a locale: exact tag, then a matching language prefix, then the default (package spec §5.4).</summary>
-    public static Representation PickRepresentation(ContentNode node, string? locale)
+    /// <summary>
+    /// The representation of a node chosen for a locale, a priority list of tags (package spec §5.4): the lookup over
+    /// the representations, each tagged (the default one with its node's language), else the default representation.
+    /// Null or an empty list is no request.
+    /// </summary>
+    public static Representation PickRepresentation(ContentNode node, IReadOnlyList<string>? locale) =>
+        PickRepresentation(node, locale, null)!;
+
+    /// <summary>
+    /// As <see cref="PickRepresentation(ContentNode, IReadOnlyList{string})"/>, choosing only among the
+    /// representations <paramref name="eligible"/> keeps (Reader contract §9.2 step 5.4); null when it keeps none.
+    /// </summary>
+    internal static Representation? PickRepresentation(ContentNode node, IReadOnlyList<string>? locale, Func<Representation, bool>? eligible)
     {
-        if (string.IsNullOrEmpty(locale))
+        ArgumentNullException.ThrowIfNull(node);
+        var reps = eligible is null ? node.Representations : node.Representations.Where(eligible).ToList();
+        var fallback = reps.FirstOrDefault(r => r.Locale is null) ?? reps.FirstOrDefault();
+        if (LocaleLookup.List(locale).Count == 0)
         {
-            return node.Representations[0];
+            return fallback;
         }
 
-        var want = locale.ToLowerInvariant();
-        // Package spec §5.4: exact; then the longest tag the request starts with (RFC 4647 Lookup); then the lowest
-        // tag, in code-point order, that starts with the request.
-        var tagged = node.Representations.Where(r => r.Locale is not null).ToList();
-        return tagged.FirstOrDefault(r => r.Locale!.ToLowerInvariant() == want)
-               ?? tagged.Where(r => want.StartsWith(r.Locale!.ToLowerInvariant() + "-", StringComparison.Ordinal)).OrderByDescending(r => r.Locale!.Length).FirstOrDefault()
-               ?? tagged.Where(r => r.Locale!.ToLowerInvariant().StartsWith(want + "-", StringComparison.Ordinal)).OrderBy(r => r.Locale, StringComparer.Ordinal).FirstOrDefault()
-               ?? node.Representations[0];
+        return LocaleLookup.Lookup(reps.Select(r => (LocaleLookup.RepresentationTag(node, r), r)), locale) ?? fallback;
     }
 
     /// <summary>Builds one citation record for a representation of a node.</summary>
@@ -125,7 +132,8 @@ public static class Citations
                 Id = $"{result.Id}#{node.Path}",
                 Ref = $"{result.Id}@{result.Version}#{node.Path}",
                 Path = node.Path,
-                Locale = rep.Locale ?? Str(manifest["language"]),
+                // Contract §7, package spec §5.4: the representation's tag; the default's is its node's language.
+                Locale = LocaleLookup.RepresentationTag(node, rep),
                 Type = Str(fm["type"]) ?? "",
                 Title = Str(fm["title"]),
                 Description = Str(fm["description"]),

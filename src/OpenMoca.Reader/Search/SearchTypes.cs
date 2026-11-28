@@ -17,12 +17,15 @@ public sealed record SearchHit(string Digest, string Node, string Path, string? 
 /// <summary>A node excluded by the retrieval policy: package digest and node id (contract §9.5).</summary>
 public sealed record ExcludedNode(string Digest, string Node);
 
-/// <summary>Filters a backend with <c>filterPushdown</c> should apply (Reader contract §9.5).</summary>
+/// <summary>
+/// Filters a backend with <c>filterPushdown</c> should apply (Reader contract §9.5). <c>Locale</c> is the caller's
+/// priority list: keep only the representation package spec §5.4 selects for it.
+/// </summary>
 public sealed record SearchFilters(
     IReadOnlyList<string> Digests,
     IReadOnlyList<ExcludedNode> Exclude,
     IReadOnlyList<string>? Audiences = null,
-    string? Locale = null,
+    IReadOnlyList<string>? Locale = null,
     IReadOnlyList<string>? Concepts = null,
     bool AllowUnlabelled = false)
 {
@@ -127,8 +130,11 @@ public sealed record SearchOptions
     /// <summary>The host's opt-in to content the default retrieval policy excludes.</summary>
     public bool IncludeAll { get; init; }
 
-    /// <summary>Keep only the representation package spec §5.4 selects for this locale.</summary>
-    public string? Locale { get; init; }
+    /// <summary>
+    /// A priority list of language tags, most preferred first (<c>["fr-CA", "en"]</c>; one tag is a list of one): keep,
+    /// for each node, only the representation package spec §5.4 selects for it. Null or empty is no locale.
+    /// </summary>
+    public IReadOnlyList<string>? Locale { get; init; }
 
     /// <summary>Keep records bound to at least one of these concept IRIs.</summary>
     public IReadOnlyList<string>? Concepts { get; init; }
