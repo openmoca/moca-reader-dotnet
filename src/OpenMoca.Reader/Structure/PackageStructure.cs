@@ -15,12 +15,16 @@ public sealed record PackageStructure(bool Present, bool Ok, IReadOnlyList<Struc
     /// <summary>The structure file.</summary>
     public const string StructureFile = "structure.ttl";
 
+    /// <summary>The composite's own edition groups (package spec §7.4), ordered by IRI. Empty when it has none.</summary>
+    public IReadOnlyList<EditionSlot> Slots { get; init; } = [];
+
     internal static PackageStructure Read(
         IReadOnlyDictionary<string, byte[]> bytes,
         IReadOnlyList<ContentNode> nodes,
         DiagnosticBag diagnostics,
         ReaderLimits limits,
-        string? origin)
+        string? origin,
+        IReadOnlyCollection<string>? memberIds = null)
     {
         bytes.TryGetValue(StructureFile, out var ttl);
         var bound = nodes.SelectMany(n => n.Representations).Where(r => r.Moca["concepts"] is JsonArray).ToList();
@@ -121,7 +125,10 @@ public sealed record PackageStructure(bool Present, bool Ok, IReadOnlyList<Struc
             }
         }
 
+        // Package spec §7.4: the composite's own edition groups.
+        var slots = Editions.ReadSlots(graph, memberIds ?? [], diagnostics, StructureFile);
+
         var ok = !diagnostics.Since(before).Any(d => d.Code.StartsWith('O'));
-        return new PackageStructure(true, ok, parsed.Facts, graph);
+        return new PackageStructure(true, ok, parsed.Facts, graph) { Slots = slots };
     }
 }

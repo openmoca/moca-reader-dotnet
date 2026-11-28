@@ -29,7 +29,7 @@ public static class StructureLayers
 /// One structure fact, normalised to one direction: <c>B skos:narrower A</c> becomes <c>A broader B</c>.
 /// </summary>
 /// <param name="S">The subject IRI.</param>
-/// <param name="Kind">concept, collection, label, definition, broader, related, hasPart, requires, replaces, deprecated or member.</param>
+/// <param name="Kind">concept, collection, label, altLabel, definition, broader, related, hasPart, requires, replaces, deprecated, member, workExample or defaultEdition.</param>
 /// <param name="O">The object IRI, for relations and collection members.</param>
 /// <param name="Value">A literal value, for labels and definitions.</param>
 /// <param name="Lang">The literal's language tag, or an empty string.</param>

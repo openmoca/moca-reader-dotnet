@@ -400,7 +400,10 @@ public sealed class MocaSearch
         // an egress hook reorders them and needs candidates to choose from. Either way the search asks again while too
         // few pass (contract §9.2).
         var pushdown = _backend.Features.HasFlag(BackendFeatures.FilterPushdown);
-        var first = pushdown && !localeHeld && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
+        // A store search loads its composers' states with its hits, after this plan, so it cannot yet tell whether any
+        // folds editions: with a locale it asks for more, as when one does.
+        var folds = request.Locale is not null && request.Editions != EditionsMode.All && (_library is null || composition.HasSlots);
+        var first = pushdown && !localeHeld && !folds && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
             ? request.Limit
             : (int)Math.Min((long)request.Limit * _overfetch, int.MaxValue);
         return (Math.Max(1, _maxCandidates is { } max ? Math.Min(first, max) : first), filters);
@@ -515,6 +518,32 @@ public sealed class MocaSearch
         return true;
     }
 
+    private bool KeepsEdition(CitationRecord record, IReadOnlyList<string> locale, Dictionary<string, PackageResult> loaded, StoreView? view,
+        CompositionIndex composition)
+    {
+        foreach (var composer in composition.ComposersOf(record.Package.Digest))
+        {
+            if (!composer.HasSlots)
+            {
+                continue;
+            }
+
+            // Package spec §7.4, "Authority": only where the composite's signers cover the record's package, as for upTo.
+            // For a store search the composite's state is among those the view loaded for the record's composers.
+            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded, view), record.Package.Id))
+            {
+                continue;
+            }
+
+            if (!composer.KeepsEdition(record, locale))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private IReadOnlyList<string> RelationScopesOf(string digest, Dictionary<string, PackageResult> loaded, StoreView? view) =>
         _library is not null
             ? loaded.GetValueOrDefault(digest)?.RelationScopes ?? []
@@ -600,6 +629,12 @@ public sealed class MocaSearch
             }
 
             if (caller.Locale is not null && !LocaleOk(record, caller.Locale, loaded, eligible))
+            {
+                continue;
+            }
+
+            // Contract §9.2 step 5.4, package spec §7.4: one edition per slot, where the composite speaks for the record.
+            if (caller.Locale is not null && caller.Editions != EditionsMode.All && composition.HasSlots && !KeepsEdition(record, caller.Locale, loaded, view, composition))
             {
                 continue;
             }

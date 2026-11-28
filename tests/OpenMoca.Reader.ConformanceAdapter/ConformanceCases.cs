@@ -177,6 +177,9 @@ public static class ConformanceCases
             "related" => StructureJson.Items(s.Related(iri)),
             "sequence" => s.Sequence(iri) is { } seq ? StructureJson.Items(seq) : null,
             "nodes" => StructureJson.Strings(s.Nodes(iri, Str(args["include"]) ?? "none").Select(r => r.Node.Ref)),
+            // Package spec §7.4, contract §10: a slot's editions, and the one a locale chooses.
+            "editions" => new JsonArray([.. s.Editions(iri).Select(e => (JsonNode)EditionJson(e))]),
+            "chooseEdition" => s.ChooseEdition(iri, LocaleOf(args["locale"])) is { } chosen ? JsonValue.Create(chosen) : null,
             var op => throw new InvalidOperationException($"unknown structure op {op}"),
         };
 
@@ -210,6 +213,32 @@ public static class ConformanceCases
             ["codes"] = StructureJson.Strings(library.Diagnostics.Select(d => d.Code)),
             ["result"] = JsonSerializer.SerializeToNode(entries, CitationJson.Options),
         };
+    }
+
+    /// <summary>Package spec §5.4: a locale is a tag or a priority list.</summary>
+    private static List<string>? LocaleOf(JsonNode? locale) => locale switch
+    {
+        JsonArray list => [.. list.Select(Str).OfType<string>()],
+        JsonValue one when Str(one) is { } tag => [tag],
+        _ => null,
+    };
+
+    /// <summary>Contract §10: an edition as <c>{ id, version, language?, title?, default }</c>.</summary>
+    private static JsonObject EditionJson(EditionItem e)
+    {
+        var item = new JsonObject { ["id"] = e.Id, ["version"] = e.Version };
+        if (e.Language is not null)
+        {
+            item["language"] = e.Language;
+        }
+
+        if (e.Title is not null)
+        {
+            item["title"] = e.Title;
+        }
+
+        item["default"] = e.Default;
+        return item;
     }
 
     private static TermsLimits? TermsLimitsOf(JsonObject o) => o["termsLimits"] is JsonObject limits ? TermsLimits.FromJson(limits) : null;
@@ -257,12 +286,8 @@ public static class ConformanceCases
             Limit = (int)(JsonValues.IntegerOf(search["limit"]) ?? 50),
             IncludeAll = search["includeAll"] is JsonValue ia && ia.TryGetValue<bool>(out var iab) && iab,
             // Package spec §5.4: a tag or a priority list.
-            Locale = search["locale"] switch
-            {
-                JsonArray list => [.. list.Select(Str).OfType<string>()],
-                JsonValue one when Str(one) is { } tag => [tag],
-                _ => null,
-            },
+            Locale = LocaleOf(search["locale"]),
+            Editions = Str(search["editions"]) == "all" ? EditionsMode.All : EditionsMode.Choose,
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
             UpTo = Str(search["upTo"]),

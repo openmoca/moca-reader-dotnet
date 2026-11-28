@@ -27,6 +27,14 @@ For moca-spec 0.8.0: content in more than one language.
 
 - **Relations `translationOf` and `editionOf`** (package spec §7.2): core types, reported with no effect and no
   `R005`. The vendored manifest schema's description names them.
+- **Edition groups** (package spec §7.4): `schema:workExample` and `moca:defaultEdition` in a composite's own
+  structure make a slot of editions (`O006_EDITION_GROUP_INVALID` for a statement that is ignored;
+  `PackageStructure.Slots`). An edition is bound to its slot as a part is (`Scope`, `Nodes()`, `UpTo`). With a
+  locale, the gate keeps one edition per slot, and its members, where the composite's signers cover the record's
+  package (`SearchOptions.Editions = EditionsMode.All` keeps every one). Package states carry each member's
+  `language` and the slots (`CompositionMember.Language`, `CompositionState.Slots`). Structure operations
+  `Editions(slot)` (`EditionItem`) and `ChooseEdition(slot, locale)`; `Editions.Choose`. Unit tests in
+  `EditionTests`.
 
 ## Unreleased: 0.8.0
 

@@ -218,9 +218,10 @@ public sealed class ConformanceCorpusTests
     {
         var problems = new List<string>();
         CompareSets("codes", e["codes"] ?? new JsonArray(), actual["codes"], problems);
-        // Structure answers are facts: compared exactly, key order and list order included.
-        var want = e["result"]?.ToJsonString(JsonValues.CompactJson) ?? "null";
-        var got = actual["result"]?.ToJsonString(JsonValues.CompactJson) ?? "null";
+        // Structure answers are facts: compared exactly, list order included; members of an object (an edition, a
+        // concept) in any order, as the runner compares them.
+        var want = Canonical(e["result"]);
+        var got = Canonical(actual["result"]);
         if (want != got)
         {
             problems.Add($"result: expected {want}, got {got}");

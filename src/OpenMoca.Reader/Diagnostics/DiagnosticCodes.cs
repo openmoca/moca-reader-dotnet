@@ -145,6 +145,8 @@ public static class DiagnosticCodes
     public const string O003RemoteReference = "O003_REMOTE_REFERENCE";
     /// <summary>requires, broader or hasPart forms a cycle.</summary>
     public const string O005StructureCycle = "O005_STRUCTURE_CYCLE";
+    /// <summary>An edition group names no member, no edition of its slot as default, or two defaults; the statement is ignored.</summary>
+    public const string O006EditionGroupInvalid = "O006_EDITION_GROUP_INVALID";
 
     // Sidecar indexes
     /// <summary>index.json does not validate against the sidecar schema.</summary>
@@ -239,6 +241,7 @@ public static class DiagnosticCodes
         [O002ConceptUndeclared] = DiagnosticSeverity.Warning,
         [O003RemoteReference] = DiagnosticSeverity.Warning,
         [O005StructureCycle] = DiagnosticSeverity.Warning,
+        [O006EditionGroupInvalid] = DiagnosticSeverity.Warning,
         [S001SidecarInvalid] = DiagnosticSeverity.Error,
         [S002SidecarTargetMismatch] = DiagnosticSeverity.Error,
         [S003SidecarStale] = DiagnosticSeverity.Warning,

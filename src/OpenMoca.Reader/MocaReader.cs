@@ -219,7 +219,8 @@ public static partial class MocaReader
         }
 
         result.Nodes = ContentReader.Read(manifest, files, bytes, result.FileDigests, diagnostics, options.Limits, budget.Evidence);
-        result.Structure = PackageStructure.Read(bytes, result.Nodes, diagnostics, options.Limits, result.Digest);
+        var memberIds = (manifest["members"] as JsonArray ?? []).OfType<JsonObject>().Select(m => JsonValues.StringOf(m["id"])).OfType<string>().ToList();
+        result.Structure = PackageStructure.Read(bytes, result.Nodes, diagnostics, options.Limits, result.Digest, memberIds);
         // Package spec §4.10: readingOrder resolves against the package's own structure.ttl only.
         if (JsonValues.StringOf(manifest["readingOrder"]) is { } readingOrder && !diagnostics.Items.Any(d => d.Code == DiagnosticCodes.M002ManifestSchema))
         {

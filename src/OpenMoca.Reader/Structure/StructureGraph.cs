@@ -60,7 +60,7 @@ public sealed class CollectionEntry(string iri, FactSource source)
 public sealed class StructureGraph
 {
     /// <summary>The relations the structure core understands.</summary>
-    public static readonly string[] Relations = ["broader", "related", "hasPart", "requires", "replaces"];
+    public static readonly string[] Relations = ["broader", "related", "hasPart", "requires", "replaces", "workExample", "defaultEdition"];
 
     private readonly Dictionary<string, Dictionary<string, OrderedDictionary<string, FactSource>>> _edges = [];
     private readonly Dictionary<string, Dictionary<string, OrderedDictionary<string, FactSource>>> _inverse = [];

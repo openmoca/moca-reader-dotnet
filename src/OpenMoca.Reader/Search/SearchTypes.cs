@@ -136,6 +136,13 @@ public sealed record SearchOptions
     /// </summary>
     public IReadOnlyList<string>? Locale { get; init; }
 
+    /// <summary>
+    /// With a locale, whether a composite package's edition groups keep one edition per slot (<see
+    /// cref="EditionsMode.Choose"/>, the default) or every edition (<see cref="EditionsMode.All"/>) (package spec §7.4,
+    /// Reader contract §9). Without a locale it has no effect.
+    /// </summary>
+    public EditionsMode Editions { get; init; }
+
     /// <summary>Keep records bound to at least one of these concept IRIs.</summary>
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -154,6 +161,16 @@ public sealed record SearchOptions
     /// caller only; a hook never changes it.
     /// </summary>
     public TermsRequest? Terms { get; init; }
+}
+
+/// <summary>What a search does with a composite package's edition groups when it has a locale (Reader contract §9).</summary>
+public enum EditionsMode
+{
+    /// <summary>One edition per slot, chosen by the locale (package spec §7.4). The default.</summary>
+    Choose,
+
+    /// <summary>Every edition.</summary>
+    All,
 }
 
 /// <summary>What an ingress hook may change: the query, and the concepts or scope the backend searches.</summary>
