@@ -45,7 +45,8 @@ public sealed record ReadingOrder
                     continue;
                 }
 
-                foreach (var e in graph.In("broader", n).Concat(graph.Out("hasPart", n)))
+                // Package spec §7.4: an edition takes its slot's place, as a part does.
+                foreach (var e in graph.In("broader", n).Concat(graph.Out("hasPart", n)).Concat(graph.Out("workExample", n)))
                 {
                     if (!positions.ContainsKey(e.Iri))
                     {

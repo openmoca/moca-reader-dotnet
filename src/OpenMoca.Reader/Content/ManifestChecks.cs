@@ -130,7 +130,7 @@ internal static partial class ManifestChecks
 
     /// <summary>Package spec §7.2: the core relation types.</summary>
     public static readonly IReadOnlySet<string> CoreRelationTypes =
-        new HashSet<string>(["supersedes", "amends", "conflictsWith", "crossReferences", "isPartOf"], StringComparer.Ordinal);
+        new HashSet<string>(["supersedes", "amends", "conflictsWith", "crossReferences", "isPartOf", "translationOf", "editionOf"], StringComparer.Ordinal);
 
     /// <summary>Relation types each recognised profile defines. None does yet.</summary>
     private static readonly Dictionary<string, string[]> ProfileRelationTypes = new(StringComparer.Ordinal);

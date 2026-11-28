@@ -20,7 +20,22 @@ public sealed record MediaDescription(string Source, string Resource, string Typ
 
     /// <summary>The stretches of a valid alternate: its <c>sync</c>, or the default <c>[{ at: 0, offset: 0 }]</c>.</summary>
     public IReadOnlyList<SyncEntry>? Sync { get; init; }
+
+    /// <summary>Package spec §5.7: the caption tracks that stand, in order; null when none does.</summary>
+    public IReadOnlyList<CaptionTrack>? Captions { get; init; }
 }
+
+/// <summary>
+/// One caption or subtitle track of a media description (package spec §5.7): a WebVTT source in the package, its
+/// language, and its HTML track kind (<c>subtitles</c> when the package gives none).
+/// </summary>
+/// <param name="Source">The <c>id</c> of the source whose resource is the track's WebVTT file.</param>
+/// <param name="Language">The track's language, a BCP 47 tag.</param>
+/// <param name="Kind"><c>subtitles</c>, <c>captions</c>, <c>descriptions</c> or <c>chapters</c>.</param>
+public sealed record CaptionTrack(
+    [property: System.Text.Json.Serialization.JsonPropertyName("source")] string Source,
+    [property: System.Text.Json.Serialization.JsonPropertyName("language")] string Language,
+    [property: System.Text.Json.Serialization.JsonPropertyName("kind")] string Kind);
 
 /// <summary>
 /// One entry of an alternate's <c>sync</c> (package spec §5.7): from <paramref name="At"/> on the reference, the
@@ -69,11 +84,25 @@ public sealed class Representation
     public JsonObject Moca => Frontmatter["moca"] as JsonObject ?? [];
 }
 
+/// <summary>Reader interface §4: how many nodes have a representation in one language, and of how many.</summary>
+/// <param name="Nodes">The nodes with a representation in the language.</param>
+/// <param name="Of">The package's nodes.</param>
+public sealed record LocaleCount(
+    [property: System.Text.Json.Serialization.JsonPropertyName("nodes")] int Nodes,
+    [property: System.Text.Json.Serialization.JsonPropertyName("of")] int Of);
+
 /// <summary>An OKF concept document under <c>content/</c>, with its locale representations.</summary>
 public sealed class ContentNode
 {
     /// <summary>The node path relative to <c>content/</c> (the default-language file name), NFC.</summary>
     public required string Path { get; init; }
+
+    /// <summary>
+    /// The default representation's language (package spec §5.3, §5.4): its own <c>moca.language</c>, else the
+    /// manifest's <c>language</c>, or null when there is neither. Its tag in the locale lookup, and its records'
+    /// <c>node.locale</c>.
+    /// </summary>
+    public string? Language { get; internal set; }
 
     /// <summary>Representations, default language first, then by locale.</summary>
     public List<Representation> Representations { get; } = [];

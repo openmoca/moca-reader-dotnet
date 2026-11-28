@@ -10,7 +10,7 @@ namespace OpenMoca.Reader.Structure;
 
 /// <summary>
 /// Parses Turtle (a package's <c>structure.ttl</c> or a host overlay) into core structure facts
-/// (package spec §5.6). Only the SKOS, DCMI and OWL terms the spec names are understood; others are
+/// (package spec §5.6, §7.4). Only the SKOS, DCMI, OWL, schema.org and MOCA terms the spec names are understood; others are
 /// ignored. Nothing is fetched: <c>owl:imports</c> and non-absolute IRIs are reported (O003), never followed.
 /// </summary>
 public static partial class StructureParser
@@ -36,6 +36,9 @@ public static partial class StructureParser
         [$"{Dct}replaces"] = ("replaces", false),
         [$"{Dct}isReplacedBy"] = ("replaces", true),
         [$"{Owl}deprecated"] = ("deprecated", false),
+        // Package spec §7.4: edition groups.
+        [Editions.SchemaWorkExample] = ("workExample", false),
+        [Editions.MocaDefaultEdition] = ("defaultEdition", false),
     };
 
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+\z")]

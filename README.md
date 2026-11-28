@@ -42,10 +42,52 @@ way, so they return the same results:
   character (with its marks) and each pair of neighbouring characters.
 - No stemming. A host that needs it supplies its own lexical backend.
 - Without a locale, every language of a node is searched and its best match
-  returned; with one, the representation package spec §5 selects.
+  returned; with one, the representation package spec §5.4 selects. A locale
+  is a language tag or a priority list of them (`Locale = "fr"`,
+  `Locale = ["fr-CA", "en"]`), a `LocaleRequest`. `library.Get(id, ["fr-CA", "en"])`
+  and `library.Citations(...)` take the same.
 
 Characters added in very recent Unicode versions can tokenise differently
 across Readers, because each language runtime ships its own Unicode data.
+
+## Languages
+
+A node's translations (`page.fr.md` beside `page.md`) are its representations,
+and a locale chooses one of them (package spec §5.4). A composite package can
+also group whole packages as editions of one work, one per language
+(package spec §7.4).
+
+```csharp
+// Each node in French where there is a French file, else in English, else in its default language.
+var records = await search.SearchAsync("bread", new SearchOptions { Locale = ["fr-CA", "en"] });
+
+// A composite's slot: its editions, and the one a locale chooses.
+IReadOnlyList<EditionItem> editions = library.Structure.Editions("https://example.com/course#bread");
+string? chosen = library.Structure.ChooseEdition("https://example.com/course#bread", ["fr"]);
+```
+
+- A page in another language than its package's (a Welsh page in an English
+  package, or a glossary in several, `mul`) says so with `moca.language` in
+  its default file; its records' `node.locale` is that language.
+- `result.LocaleCoverage` says how far the nodes come in each language:
+  `{ "en": { nodes: 40, of: 40 }, "fr": { nodes: 12, of: 40 } }`.
+- A translation that does not write `moca.concepts`, `status`,
+  `moca.valid_from`, `moca.valid_until` or `moca.audience` has its default
+  file's, so it is found by topic and retired with the original.
+- A search chooses only among the representations it may return, so a retired
+  translation falls back as a missing one does.
+- `LocaleMode.Only` leaves out records in no language of the list (a node
+  with no French file drops out of a French search); `LocaleMode.First` puts
+  records in the first language first, then the next, and leaves nothing out.
+- With a locale, a search keeps one edition per slot
+  (`Editions = EditionsMode.All` keeps every one), but only where the
+  composite's signers speak for the edition's package, or the library allows
+  unsigned relations. Package states carry the slots, so a store search does
+  the same.
+- A media description's caption and subtitle tracks are in
+  `record.Node.Media[i].Captions`, each with its source, language and kind
+  (`subtitles` when the package gives none). Evidence is still checked
+  against the `transcript` only.
 
 ## Conformance
 
@@ -328,7 +370,9 @@ mapping, in the specification.
 | [Sigstore](https://www.sigstore.dev/) bundles | `OpenMoca.Reader.Sigstore`: offline only; issuer and subject compared exactly | follow |
 | [age v1](https://age-encryption.org/v1) (X25519 and scrypt recipients) | `OpenMoca.Reader.Age`: encrypted packages, decrypt only | follow |
 | [SKOS](https://www.w3.org/TR/skos-reference/) and [Dublin Core terms](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/) in RDF 1.1 Turtle | `structure.ttl` | follow (the named terms) |
-| [WebVTT](https://www.w3.org/TR/webvtt1/) | transcripts that evidence cites | follow |
+| [schema.org](https://schema.org/) `workExample` | edition groups in a composite's `structure.ttl` | follow (that term) |
+| [WebVTT](https://www.w3.org/TR/webvtt1/) | transcripts that evidence cites, and caption tracks | follow |
+| [HTML track kinds](https://html.spec.whatwg.org/multipage/media.html#attr-track-kind) | a caption track's `kind` | follow (the four kinds) |
 | [BCP 47](https://www.rfc-editor.org/info/bcp47) | `language`, `locales`, search locales | follow |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | dates, validity windows, `datePackaged` | follow |
 | [SPDX licence expressions](https://spdx.org/licenses/) | `license`, and a node's licence in citation records | follow (exposed as written) |

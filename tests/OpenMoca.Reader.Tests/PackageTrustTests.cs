@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -200,18 +201,26 @@ public sealed class PackageTrustTests
     public async Task Evaluate_WhenTraced_RecordsCountsAndNoContent()
     {
         var (manifest, digests, attestations) = await Stored("signed-reviewed");
-        var spans = new List<Activity>();
+        // The listener hears the Reader's spans from every test that runs at the same time, on other threads: collect
+        // them in a thread-safe queue, and keep only this call's, the spans in this test's own trace.
+        var spans = new ConcurrentQueue<Activity>();
+        using var testSource = new ActivitySource("OpenMoca.Reader.Tests.PackageTrust");
         using var listener = new ActivityListener
         {
-            ShouldListenTo = s => s.Name == ReaderTelemetry.SourceName,
+            ShouldListenTo = s => s.Name == ReaderTelemetry.SourceName || s.Name == testSource.Name,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = spans.Add,
+            ActivityStopped = spans.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
-        PackageTrust.Evaluate(manifest, digests, attestations, TrustRoot.LoadFile(Fixture("trust-root.json")), DefaultNow);
+        ActivityTraceId trace;
+        using (var parent = testSource.StartActivity("test"))
+        {
+            trace = parent!.TraceId;
+            PackageTrust.Evaluate(manifest, digests, attestations, TrustRoot.LoadFile(Fixture("trust-root.json")), DefaultNow);
+        }
 
-        var span = Assert.Single(spans, s => s.OperationName == ReaderTelemetry.PackageTrustSpan);
+        var span = Assert.Single(spans.ToArray(), s => s.TraceId == trace && s.OperationName == ReaderTelemetry.PackageTrustSpan);
         Assert.Equal(2, span.GetTagItem("moca.attestations.count"));
         Assert.Equal(1, span.GetTagItem("moca.signers.count"));
         Assert.Equal(true, span.GetTagItem("moca.trust.signed"));

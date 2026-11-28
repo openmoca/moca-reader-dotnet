@@ -17,12 +17,15 @@ public sealed record SearchHit(string Digest, string Node, string Path, string? 
 /// <summary>A node excluded by the retrieval policy: package digest and node id (contract §9.5).</summary>
 public sealed record ExcludedNode(string Digest, string Node);
 
-/// <summary>Filters a backend with <c>filterPushdown</c> should apply (Reader contract §9.5).</summary>
+/// <summary>
+/// Filters a backend with <c>filterPushdown</c> should apply (Reader contract §9.5). <c>Locale</c> is the caller's
+/// priority list: keep only the representation package spec §5.4 selects for it.
+/// </summary>
 public sealed record SearchFilters(
     IReadOnlyList<string> Digests,
     IReadOnlyList<ExcludedNode> Exclude,
     IReadOnlyList<string>? Audiences = null,
-    string? Locale = null,
+    LocaleRequest? Locale = null,
     IReadOnlyList<string>? Concepts = null,
     bool AllowUnlabelled = false)
 {
@@ -127,8 +130,25 @@ public sealed record SearchOptions
     /// <summary>The host's opt-in to content the default retrieval policy excludes.</summary>
     public bool IncludeAll { get; init; }
 
-    /// <summary>Keep only the representation package spec §5.4 selects for this locale.</summary>
-    public string? Locale { get; init; }
+    /// <summary>
+    /// A language tag or a priority list of them, most preferred first (<c>"fr"</c>, <c>["fr-CA", "en"]</c>): keep, for
+    /// each node, only the representation package spec §5.4 selects for it. Null or empty is no locale.
+    /// </summary>
+    public LocaleRequest? Locale { get; init; }
+
+    /// <summary>
+    /// What the locale does (Reader contract §9); no effect without one. <see cref="LocaleMode.Choose"/> (the default)
+    /// chooses each node's representation; <see cref="LocaleMode.Only"/> also leaves out records in no language of the
+    /// list; <see cref="LocaleMode.First"/> orders records by the first entry of the list they match.
+    /// </summary>
+    public LocaleMode LocaleMode { get; init; }
+
+    /// <summary>
+    /// With a locale, whether a composite package's edition groups keep one edition per slot (<see
+    /// cref="EditionsMode.Choose"/>, the default) or every edition (<see cref="EditionsMode.All"/>) (package spec §7.4,
+    /// Reader contract §9). Without a locale it has no effect.
+    /// </summary>
+    public EditionsMode Editions { get; init; }
 
     /// <summary>Keep records bound to at least one of these concept IRIs.</summary>
     public IReadOnlyList<string>? Concepts { get; init; }
@@ -148,6 +168,32 @@ public sealed record SearchOptions
     /// caller only; a hook never changes it.
     /// </summary>
     public TermsRequest? Terms { get; init; }
+}
+
+/// <summary>What a search's locale does (Reader contract §9).</summary>
+public enum LocaleMode
+{
+    /// <summary>For each node, the representation the locale selects. Nothing is left out or reordered. The default.</summary>
+    Choose,
+
+    /// <summary>
+    /// As <see cref="Choose"/>, then records are ordered by the first entry of the locale list their language matches,
+    /// then the next, then records that match none; each group keeps the order it would otherwise have.
+    /// </summary>
+    First,
+
+    /// <summary>As <see cref="Choose"/>, then only records whose language matches an entry of the locale list pass.</summary>
+    Only,
+}
+
+/// <summary>What a search does with a composite package's edition groups when it has a locale (Reader contract §9).</summary>
+public enum EditionsMode
+{
+    /// <summary>One edition per slot, chosen by the locale (package spec §7.4). The default.</summary>
+    Choose,
+
+    /// <summary>Every edition.</summary>
+    All,
 }
 
 /// <summary>What an ingress hook may change: the query, and the concepts or scope the backend searches.</summary>

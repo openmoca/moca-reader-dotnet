@@ -86,6 +86,16 @@ public sealed class ConformanceCorpusTests
             }
         }
 
+        // Package spec §4.6–4.13, Reader interface §4, attestations §7.1: result fields compared as JSON values; null
+        // means absent.
+        foreach (var field in new[] { "images", "translations", "tags", "apps", "readingOrder", "issuedCopy", "datePublished", "datePackaged", "publisher", "url", "contributors", "localeCoverage" })
+        {
+            if (e.TryGetPropertyValue(field, out var want) && Canonical(want) != Canonical(actual[field]))
+            {
+                problems.Add($"{field}: expected {Canonical(want)}, got {Canonical(actual[field])}");
+            }
+        }
+
         if (e["sidecarUsable"] is JsonValue usable && usable.GetValue<bool>() != (actual["sidecarUsable"]?.GetValue<bool>()))
         {
             problems.Add($"sidecarUsable: expected {usable}, got {actual["sidecarUsable"]}");
@@ -139,6 +149,16 @@ public sealed class ConformanceCorpusTests
         if (JsonValues.IntegerOf(e["count"]) is { } count && records.Count != count)
         {
             problems.Add($"expected {count} result(s), got {records.Count}");
+        }
+
+        // Contract §9, localeMode first: these results come in this order (others may come between them).
+        if (e["order"] is JsonArray order)
+        {
+            var at = order.Select(k => records.FindIndex(r => JsonValues.StringOf(r["node"]!["ref"]) == JsonValues.StringOf(k))).ToList();
+            if (at.Where((i, n) => i < 0 || (n > 0 && i < at[n - 1])).Any())
+            {
+                problems.Add($"order: expected {string.Join(", ", order.Select(JsonValues.StringOf))}, got {string.Join(", ", records.Select(r => JsonValues.StringOf(r["node"]!["ref"])))}");
+            }
         }
 
         foreach (var (k, locale) in e["locales"] as JsonObject ?? [])
@@ -218,9 +238,10 @@ public sealed class ConformanceCorpusTests
     {
         var problems = new List<string>();
         CompareSets("codes", e["codes"] ?? new JsonArray(), actual["codes"], problems);
-        // Structure answers are facts: compared exactly, key order and list order included.
-        var want = e["result"]?.ToJsonString(JsonValues.CompactJson) ?? "null";
-        var got = actual["result"]?.ToJsonString(JsonValues.CompactJson) ?? "null";
+        // Structure answers are facts: compared exactly, list order included; members of an object (an edition, a
+        // concept) in any order, as the runner compares them.
+        var want = Canonical(e["result"]);
+        var got = Canonical(actual["result"]);
         if (want != got)
         {
             problems.Add($"result: expected {want}, got {got}");

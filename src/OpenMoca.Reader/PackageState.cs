@@ -26,6 +26,14 @@ public sealed partial record PackageState
     /// <summary>The manifest's default language, if any.</summary>
     [JsonPropertyName("language")] public string? Language { get; init; }
 
+    /// <summary>
+    /// Package spec §5.3: node path to language, for each node whose default file sets a <c>moca.language</c> other
+    /// than the manifest's, so a stored record's file is known (contract §9.4). Null when there is none.
+    /// </summary>
+    [JsonPropertyName("nodeLanguages")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? NodeLanguages { get; init; }
+
     /// <summary>The manifest's relations.</summary>
     [JsonPropertyName("relations")] public JsonArray Relations { get; init; } = [];
 
@@ -77,12 +85,16 @@ public sealed partial record PackageState
             }
         }
 
+        var language = JsonValues.StringOf(result.Manifest?["language"]);
+        var nodeLanguages = result.Nodes.Where(n => n.Language is not null && n.Language != language)
+            .ToDictionary(n => n.Path, n => n.Language!, StringComparer.Ordinal);
         return new PackageState
         {
             Digest = result.Digest ?? "",
             Id = result.Id,
             Version = result.Version,
-            Language = JsonValues.StringOf(result.Manifest?["language"]),
+            Language = language,
+            NodeLanguages = nodeLanguages.Count > 0 ? nodeLanguages : null,
             Relations = result.Manifest?["relations"] is JsonArray relations ? (JsonArray)relations.DeepClone() : [],
             RelationScopes = [.. result.RelationScopes],
             Signers = [.. result.Signers],
@@ -150,7 +162,9 @@ public sealed partial record PackageState
         var until = Content.Dates.Parse(trust.ValidUntil);
         var key = $"{state.Id}@{state.Version}";
         var locale = record.Node.Locale;
-        var file = locale is null || locale == state.Language
+        // The default file when the locale is its node's language: the node's own moca.language, else the package's.
+        var own = state.NodeLanguages is { } languages && languages.TryGetValue(record.Node.Path, out var nodeLanguage) ? nodeLanguage : state.Language;
+        var file = locale is null || locale == own
             ? $"content/{record.Node.Path}"
             : $"content/{MdSuffix().Replace(record.Node.Path, "")}.{locale}.md";
         var supersededBy = index.Superseded.GetValueOrDefault(key) ?? [];

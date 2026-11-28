@@ -1,4 +1,5 @@
 using OpenMoca.Reader.Citations;
+using OpenMoca.Reader.Json;
 
 namespace OpenMoca.Reader.Structure;
 
@@ -181,7 +182,8 @@ public sealed class StructureIndex
         while (stack.Count > 0)
         {
             var n = stack.Pop();
-            foreach (var e in Graph.In("broader", n).Concat(Graph.Out("hasPart", n)))
+            // Package spec §7.4: an edition is below its slot, as a part is.
+            foreach (var e in Graph.In("broader", n).Concat(Graph.Out("hasPart", n)).Concat(Graph.Out("workExample", n)))
             {
                 if (e.Iri != iri && result.Add(e.Iri))
                 {
@@ -198,7 +200,7 @@ public sealed class StructureIndex
     /// of narrower, parts or both, to its descendants. The default retrieval policy applies unless
     /// <paramref name="includeAll"/>. Ordered by <c>node.ref</c>.
     /// </summary>
-    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", string? locale = null, bool includeAll = false)
+    public IReadOnlyList<CitationRecord> Nodes(string iri, string include = "none", LocaleRequest? locale = null, bool includeAll = false)
     {
         var wanted = new HashSet<string>(StringComparer.Ordinal) { iri };
         if (include != "none")
@@ -215,7 +217,7 @@ public sealed class StructureIndex
 
                 if (include is "parts" or "both")
                 {
-                    next = next.Concat(Graph.Out("hasPart", n));
+                    next = next.Concat(Graph.Out("hasPart", n)).Concat(Graph.Out("workExample", n));
                 }
 
                 foreach (var e in next)
@@ -237,6 +239,62 @@ public sealed class StructureIndex
             .Where(r => includeAll || Citations.Citations.PassesDefaultPolicy(r))
             .OrderBy(r => r.Node.Ref, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// The editions of the slot <paramref name="iri"/> that can be chosen (package spec §7.4: resolved, pin-matched and
+    /// valid), ordered by id (Reader contract §10). Empty when it is no slot of a loaded package. When several loaded
+    /// composite packages declare the same slot, the first loaded one answers.
+    /// </summary>
+    public IReadOnlyList<EditionItem> Editions(string iri)
+    {
+        if (SlotOf(iri) is not { } found)
+        {
+            return [];
+        }
+
+        return [.. found.Available.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new EditionItem(
+            kv.Key,
+            kv.Value.Version,
+            JsonValues.StringOf(kv.Value.Manifest?["language"]) is { Length: > 0 } language ? language : null,
+            JsonValues.StringOf(kv.Value.Manifest?["title"]),
+            found.Slot.Default == kv.Key))];
+    }
+
+    /// <summary>
+    /// The id of the edition of the slot <paramref name="iri"/> that a search with this locale keeps (package spec §7.4,
+    /// "Choosing"), or null when it is no slot or has no edition that can be chosen.
+    /// </summary>
+    /// <param name="iri">The slot.</param>
+    /// <param name="locale">A language tag or a priority list of them; null or empty for none.</param>
+    public string? ChooseEdition(string iri, LocaleRequest? locale) =>
+        SlotOf(iri) is { } found
+            ? OpenMoca.Reader.Structure.Editions.Choose(found.Slot, found.Available.ToDictionary(kv => kv.Key, kv => JsonValues.StringOf(kv.Value.Manifest?["language"]) is { Length: > 0 } l ? l : null, StringComparer.Ordinal), locale)
+            : null;
+
+    /// <summary>Package spec §7.4: the first loaded composite that declares <paramref name="iri"/> as a slot, with the editions that can be chosen.</summary>
+    private (EditionSlot Slot, Dictionary<string, PackageResult> Available)? SlotOf(string iri)
+    {
+        foreach (var (result, _, _) in _packages)
+        {
+            if (result.Structure?.Slots.FirstOrDefault(s => s.Iri == iri) is not { } slot)
+            {
+                continue;
+            }
+
+            var available = new Dictionary<string, PackageResult>(StringComparer.Ordinal);
+            foreach (var m in result.Members)
+            {
+                if (m.Status == "resolved" && m.Result is { Valid: true } child && slot.Editions.Contains(child.Id, StringComparer.Ordinal))
+                {
+                    available.TryAdd(child.Id, child);
+                }
+            }
+
+            return (slot, available);
+        }
+
+        return null;
     }
 
     private ConceptItem Item(Edge e)

@@ -1,0 +1,125 @@
+using OpenMoca.Reader.Content;
+using OpenMoca.Reader.Diagnostics;
+using Xunit;
+
+namespace OpenMoca.Reader.Tests;
+
+/// <summary>Reading a package whose content comes in more than one language: what the corpus does not pin down.</summary>
+public sealed class LanguagePackageTests : IDisposable
+{
+    private readonly string _dir = Directory.CreateTempSubdirectory("moca-language-package-").FullName;
+
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+
+    private async Task<PackageResult> ReadAsync(string manifest, params (string Path, string Text)[] files)
+    {
+        File.WriteAllText(Path.Combine(_dir, "moca.json"), manifest);
+        Directory.CreateDirectory(Path.Combine(_dir, "content"));
+        foreach (var (path, text) in files)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(_dir, path))!);
+            File.WriteAllText(Path.Combine(_dir, path), text);
+        }
+
+        return await MocaReader.ReadPackageAsync(_dir, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("translationOf")]
+    [InlineData("editionOf")]
+    public async Task ATranslationOrEditionRelation_IsACoreType_AndNeedsNoSigner(string type)
+    {
+        var result = await ReadAsync(
+            $$"""{ "id": "https://example.com/fr", "version": "1.0.0", "title": "T", "relations": [{ "type": "{{type}}", "target": "https://example.com/en" }] }""",
+            ("content/a.md", "---\ntype: Note\ntitle: A\n---\n\nA.\n"));
+
+        Assert.True(result.Valid);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code is DiagnosticCodes.R005RelationTypeUnknown or DiagnosticCodes.R004RelationUnauthorised);
+    }
+
+    [Fact]
+    public async Task CaptionTracks_AreCheckedEntryByEntry_AndTheDescriptionStands()
+    {
+        var result = await ReadAsync(
+            """{ "id": "https://example.com/talk", "version": "1.0.0", "title": "T" }""",
+            ("media/talk.en.vtt", "WEBVTT\n\n00:00.000 --> 00:05.000\nWelcome.\n"),
+            ("media/talk.fr.vtt", "WEBVTT\n\n00:00.000 --> 00:05.000\nBienvenue.\n"),
+            ("content/talk.md", """
+                ---
+                type: Talk
+                title: Talk
+                sources:
+                  - id: video
+                    resource: https://media.example.com/talk.mp4
+                  - id: transcript
+                    resource: ../media/talk.en.vtt
+                  - id: captions-fr
+                    resource: ../media/talk.fr.vtt
+                  - id: page
+                    resource: https://example.com/talk.html
+                moca:
+                  media:
+                    - source: video
+                      type: video/mp4
+                      transcript: transcript
+                      captions:
+                        - { source: captions-fr, language: fr }
+                        - { source: transcript, language: en, kind: captions }
+                        - { source: captions-fr, language: fr, kind: captions }
+                        - { source: unknown, language: de }
+                        - { source: page, language: en }
+                        - { source: transcript, language: en, kind: karaoke }
+                ---
+
+                Welcome.
+                """));
+
+        var media = Assert.Single(new Library().Add(result).Citations().Single().Node.Media!);
+
+        Assert.True(result.Valid);
+        Assert.Equal("transcript", media.Transcript);
+        Assert.Equal([new("captions-fr", "fr", "subtitles"), new("transcript", "en", "captions")], media.Captions!);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.C006EvidenceSourceUnknown);
+        Assert.Equal(3, result.Diagnostics.Count(d => d.Code == DiagnosticCodes.C005FieldInvalid && d.Message.Contains("caption track", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task MocaLanguage_SetsTheNodesLanguage_InADefaultFileOnly_AndLocaleCoverageCountsIt()
+    {
+        var result = await ReadAsync(
+            """{ "id": "https://example.com/n", "version": "1.0.0", "title": "N", "language": "en", "locales": ["fr", "de"] }""",
+            ("content/a.md", "---\ntype: Note\ntitle: A\n---\n\nA.\n"),
+            ("content/a.fr.md", "---\ntype: Note\ntitle: A\nmoca:\n  language: it\n---\n\nA.\n"),
+            ("content/b.md", "---\ntype: Note\ntitle: B\nmoca:\n  language: cy\n---\n\nB.\n"));
+        var library = new Library().Add(result);
+
+        Assert.Equal(
+            new Dictionary<string, LocaleCount> { ["cy"] = new(1, 2), ["de"] = new(0, 2), ["en"] = new(1, 2), ["fr"] = new(1, 2) },
+            result.LocaleCoverage);
+        Assert.Equal(["cy", "de", "en", "fr"], result.LocaleCoverage!.Keys);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.C005FieldInvalid && d.File == "content/a.fr.md");
+        Assert.Equal("cy", library.Get("https://example.com/n#b.md")!.Node.Locale);
+        Assert.Equal("cy", library.Get("https://example.com/n#b.md", ["cy"])!.Node.Locale);
+        Assert.Equal("en", library.Get("https://example.com/n#a.md", ["it"])!.Node.Locale);
+    }
+
+    [Fact]
+    public async Task APackageState_KnowsANodeInItsOwnLanguage_SoAStoredRecordMapsToItsDefaultFile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var result = await ReadAsync(
+            """{ "id": "https://example.com/s", "version": "1.0.0", "title": "S", "language": "en" }""",
+            ("content/a.md", "---\ntype: Note\ntitle: A\nmoca:\n  contested_by: [\"https://example.com/other\"]\n---\n\nbread.\n"),
+            ("content/b.md", "---\ntype: Note\ntitle: B\nmoca:\n  language: cy\n  contested_by: [\"https://example.com/other\"]\n---\n\nbara bread.\n"));
+        var state = PackageState.From(result);
+        var library = new Library().Add(result);
+        var store = await new OpenMoca.Reader.Search.MemoryStoreBackend().IngestAsync(library, ct);
+
+        var records = await new OpenMoca.Reader.Search.MocaSearch([state], library.Clock, store).SearchAsync("bread", cancellationToken: ct);
+
+        Assert.Equal(new Dictionary<string, string> { ["b.md"] = "cy" }, state.NodeLanguages);
+        Assert.Contains("\"nodeLanguages\":{\"b.md\":\"cy\"}", System.Text.Json.JsonSerializer.Serialize(state), StringComparison.Ordinal);
+        Assert.Equal(2, records.Count);
+        Assert.All(records, r => Assert.Equal(["https://example.com/other"], r.Trust.ContestedBy!));
+    }
+}

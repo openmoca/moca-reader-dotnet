@@ -2,13 +2,15 @@
 
 All notable changes to OpenMoca.Reader and its bindings. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-
 ## Unreleased: 0.8.0
 
-Pre-release `0.8.0-preview.1`, from the `release-0.8.0` branch. Nothing here changes what a Reader must do (the Reader
-contract): each item is an addition to this Reader's API, and every existing call returns what it returned in 0.7.0.
+Pre-release `0.8.0-preview.2`, from the `release-0.8.0` branch. It holds both lines of 0.8.0 work: trust from what a
+store keeps and package states on demand (first in `0.8.0-preview.1`), and content in more than one language, for
+moca-spec 0.8.0. The trust and store items add to this Reader's API, and every existing call returns what it returned
+in 0.7.0. The language items follow the changed package spec and Reader contract, so some results differ from 0.7.0:
+the locale lookup, what a translation inherits, edition groups and `node.locale` for a node in its own language.
 
-### Added
+### Added (trust and store states)
 
 - **`PackageTrust.Evaluate`** and **`TrustState`**: a package's trust state from its manifest bytes, file digests and
   attestation files, under a trust root at a time (attestations §6–§7). The same code as opening the package, so the
@@ -27,7 +29,7 @@ contract): each item is an addition to this Reader's API, and every existing cal
   `moca.reader.package_states.load` (counts and durations, never content).
 - `AttestationRecord.KeyId`, `SignatureCheck.KeyId` and `TrustRoot.Expires(keyId)`.
 
-### Changed
+### Changed (trust and store states)
 
 - **`PackageState.RelationIndexOf`** is linear in the packages and their relations (it compared every pair). Same
   effects, in the same order (tested against the old scan).
@@ -38,6 +40,55 @@ contract): each item is an addition to this Reader's API, and every existing cal
   `MemoryPackageStates` (or its own source), so the relation index is built once, not with every `MocaSearch`.
 - `MocaSearch.ApplyTerms` throws `InvalidOperationException` for a search made with a host's own
   `IPackageStateSource` (use `ApplyTermsAsync`); with states in memory, or a library, it is unchanged.
+
+### Changed (content in more than one language: moca-spec 0.8.0)
+
+- **The locale lookup** (package spec §5.4): the default representation is tagged with the manifest's `language`,
+  and each truncation of the request also finds tags that start with it, so `pt-AO` finds `pt-BR` and `en` finds the
+  default file before `en-GB`. A new public class, `LocaleLookup` (`List`, `Lookup`, `Matches`,
+  `RepresentationTag`); `ContentNode` carries its default `Language`. Unit tests in `LocaleLookupTests`.
+- **A translation inherits** its default file's `moca.concepts`, `status`, `moca.valid_from` and `moca.valid_until`
+  when it writes none, each key on its own, as it already did `moca.audience` (package spec §5.4). `C010` is checked
+  on the window each representation ends up with. Unit tests in `InheritanceTests`.
+- **A retired translation falls back** (contract §9.2 step 5.4): a search chooses a node's representation among those
+  the default retrieval policy and the audience set keep, so a deprecated or ended translation is treated as a missing
+  one. When a loaded node's representations differ in those steps, `locale` is applied in the gate, not pushed down
+  (§9.5). Unit test in `SearchLanguageTests`.
+- **The terms gate's place** (contract §9.2 step 5.7): the spec now says what this Reader already did. Comments only.
+
+### Added (content in more than one language: moca-spec 0.8.0)
+
+- **`locale` as a priority list**: `SearchOptions.Locale`, `SearchFilters.Locale`, `Library.Citations`,
+  `Library.Get`, `StructureIndex.Nodes` and `StructureIndex.ChooseEdition` take a `LocaleRequest`, an immutable
+  priority list with implicit conversions from a string and from a string array or collection expression, so
+  `Locale = "fr"` still works beside `Locale = ["fr-CA", "en"]`. An empty list, like a null or empty string, is no
+  locale. The pushdown filter carries the list.
+- **Relations `translationOf` and `editionOf`** (package spec §7.2): core types, reported with no effect and no
+  `R005`. The vendored manifest schema's description names them.
+- **Edition groups** (package spec §7.4): `schema:workExample` and `moca:defaultEdition` in a composite's own
+  structure make a slot of editions (`O006_EDITION_GROUP_INVALID` for a statement that is ignored;
+  `PackageStructure.Slots`). An edition is bound to its slot as a part is (`Scope`, `Nodes()`, `UpTo`). With a
+  locale, the gate keeps one edition per slot, and its members, where the composite's signers cover the record's
+  package (`SearchOptions.Editions = EditionsMode.All` keeps every one). Package states carry each member's
+  `language` and the slots (`CompositionMember.Language`, `CompositionState.Slots`); an edition is any member the
+  composite lists itself (`CompositionMember.Direct`), even when another member also composes it. Structure operations
+  `Editions(slot)` (`EditionItem`) and `ChooseEdition(slot, locale)`; `Editions.Choose`. Unit tests in
+  `EditionTests`.
+- **`SearchOptions.LocaleMode`** (contract §9): `Choose` (the default), `Only` (records in another language drop out,
+  in the gate) and `First` (records ordered by the first locale entry they match, then the next; the search asks
+  again until `Limit` records of the first group pass). Unit test in `SearchLanguageTests`.
+- **Caption tracks** (package spec §5.7): `captions` on a media description, each `{ source, language, kind? }`,
+  checked entry by entry (`C005`, `C006`; the description stands) and carried in `node.media` with `kind` filled in
+  (`MediaDescription.Captions`, `CitationMedia.Captions`, `CaptionTrack`). Evidence is still checked against
+  `transcript` only. The vendored node and citation-record schemas follow moca-spec. Unit test in
+  `LanguagePackageTests`.
+- **`moca.language`** (package spec §5.3, §5.4): a default file's own language sets its node's `Language`, so its
+  `node.locale` and its tag in the lookup; in a translation it is `C005` and ignored. The vendored node schema
+  follows moca-spec. Package states carry `NodeLanguages` (`nodeLanguages`: path to language for each such node), so
+  a store search maps its records to the default file when it looks up reviews, `contested_by` and an issued copy's
+  changed files.
+- **`PackageResult.LocaleCoverage`** (Reader interface §4): for each language, how many nodes have a representation in
+  it, and of how many (`LocaleCount`). Unit test in `LanguagePackageTests`.
 
 ## [0.7.0] - 2026-11-15
 

@@ -277,7 +277,6 @@ internal static partial class ContentReader
                 : null;
 
             CheckEvidenceSources(file, frontmatter, diagnostics);
-            CheckWindow(file, frontmatter, diagnostics);
             CheckPaths(file, frontmatter, split.Body, files, diagnostics);
             var media = MediaDescriptions(file, frontmatter, files, diagnostics);
             var evidenceChecks = VerifyEvidence(file, frontmatter, files, bytes, diagnostics, limits, sourceText, budget, media);
@@ -296,7 +295,8 @@ internal static partial class ContentReader
             };
             if (!byKey.TryGetValue(key, out var node))
             {
-                node = new ContentNode { Path = key };
+                // Package spec §5.4: the default representation's tag in the lookup is the manifest's language.
+                node = new ContentNode { Path = key, Language = JsonValues.StringOf(manifest["language"]) is { Length: > 0 } language ? language : null };
                 byKey[key] = node;
             }
 
@@ -314,10 +314,69 @@ internal static partial class ContentReader
                     $"locale variant has no default-language file {ContentDirectory}/{node.Path}", node.Representations[0].File);
             }
 
+            // Package spec §5.3 and §5.4: a default file's moca.language is its node's language; in a translation it is
+            // ignored. A tag that does not parse already has its C005 from the node schema.
+            foreach (var rep in node.Representations)
+            {
+                if (!rep.Moca.TryGetPropertyValue("language", out var own))
+                {
+                    continue;
+                }
+
+                if (rep.Locale is not null)
+                {
+                    diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"moca.language is ignored in a translation ({rep.File}): its file name says its language", rep.File);
+                }
+                else if (JsonValues.StringOf(own) is { } tag && LanguageTag().IsMatch(tag))
+                {
+                    node.Language = tag;
+                }
+            }
+
+            // Package spec §5.4: C010 applies to the window each representation ends up with, on its own file.
+            foreach (var rep in node.Representations)
+            {
+                CheckWindow(rep.File, Inheritance.Inherited(node, rep, "valid_from"), Inheritance.Inherited(node, rep, "valid_until"), diagnostics);
+            }
+
             nodes.Add(node);
         }
 
         return nodes;
+    }
+
+    /// <summary>
+    /// Reader interface §4: for each language the nodes come in (each default file's language, and each tag in
+    /// <c>locales</c>, as written), how many nodes have a representation in it, and of how many; ordered by tag. Null
+    /// with no node or no language.
+    /// </summary>
+    public static IReadOnlyDictionary<string, LocaleCount>? LocaleCoverage(JsonObject? manifest, IReadOnlyList<ContentNode> nodes)
+    {
+        if (nodes.Count == 0)
+        {
+            return null;
+        }
+
+        var counts = new SortedDictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var tag in (manifest?["locales"] as JsonArray ?? []).Select(JsonValues.StringOf).OfType<string>())
+        {
+            counts.TryAdd(tag, new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        foreach (var node in nodes)
+        {
+            foreach (var tag in node.Representations.Select(r => r.Locale ?? node.Language).OfType<string>().Distinct(StringComparer.Ordinal))
+            {
+                if (!counts.TryGetValue(tag, out var set))
+                {
+                    counts[tag] = set = new HashSet<string>(StringComparer.Ordinal);
+                }
+
+                set.Add(node.Path);
+            }
+        }
+
+        return counts.Count == 0 ? null : counts.ToDictionary(kv => kv.Key, kv => new LocaleCount(kv.Value.Count, nodes.Count), StringComparer.Ordinal);
     }
 
     /// <summary>Package spec §5.4: <c>name.tag.md</c> is a representation only when <c>tag</c> is a declared locale.</summary>
@@ -450,7 +509,14 @@ internal static partial class ContentReader
     [GeneratedRegex(@"^sha256:[a-f0-9]{64}\z")]
     private static partial Regex Sha256Digest();
 
-    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript", "alternateOf", "sync"], StringComparer.Ordinal);
+    private static readonly HashSet<string> MediaKeys = new(["source", "type", "duration", "digest", "transcript", "alternateOf", "sync", "captions"], StringComparer.Ordinal);
+
+    // Package spec §5.7, caption tracks: HTML's track kinds, and the BCP 47 shape the manifest's tags have.
+    private static readonly HashSet<string> CaptionKinds = new(["subtitles", "captions", "descriptions", "chapters"], StringComparer.Ordinal);
+    private static readonly HashSet<string> CaptionKeys = new(["source", "language", "kind"], StringComparer.Ordinal);
+
+    [GeneratedRegex(@"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*\z")]
+    private static partial Regex LanguageTag();
 
     /// <summary>A finite JSON number, or null.</summary>
     private static double? NumberOf(JsonNode? node)
@@ -506,6 +572,12 @@ internal static partial class ContentReader
         }
 
         if (m.ContainsKey("alternateOf") && JsonValues.StringOf(m["alternateOf"]) is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        // Package spec §5.7: a bad caption entry is dropped on its own; only a captions that is not a list fails the description.
+        if (m.ContainsKey("captions") && m["captions"] is not JsonArray)
         {
             return false;
         }
@@ -612,6 +684,7 @@ internal static partial class ContentReader
             output.Add(new MediaDescription(sourceId, resource, JsonValues.StringOf(m["type"])!, NumberOf(m["duration"]), JsonValues.StringOf(m["digest"]), transcript)
             {
                 TranscriptPath = transcriptPath,
+                Captions = m["captions"] is JsonArray captions ? CaptionTracks(file, sourceId, captions, sources, files, diagnostics) : null,
             });
             raw.Add(m);
         }
@@ -647,6 +720,59 @@ internal static partial class ContentReader
         }
 
         return output;
+    }
+
+    /// <summary>
+    /// Package spec §5.7, caption tracks: each entry checked on its own, and the description stands. An entry that is not
+    /// <c>{ source, language, kind? }</c> with a BCP 47 tag and an HTML track kind, a second entry with the same source,
+    /// or a source that is not a WebVTT file under sources/ or media/ is C005; an unknown source is C006. Null when no
+    /// track stands.
+    /// </summary>
+    private static List<CaptionTrack>? CaptionTracks(string file, string mediaSource, JsonArray captions, Dictionary<string, JsonObject> sources,
+        IReadOnlyDictionary<string, string> files, DiagnosticBag diagnostics)
+    {
+        var tracks = new List<CaptionTrack>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in captions)
+        {
+            var c = entry as JsonObject;
+            var source = JsonValues.StringOf(c?["source"]);
+            var language = JsonValues.StringOf(c?["language"]);
+            var kind = c is not null && c.ContainsKey("kind") ? JsonValues.StringOf(c["kind"]) : "subtitles";
+            if (c is null || c.Any(p => !CaptionKeys.Contains(p.Key)) || source is not { Length: > 0 } || language is null
+                || !LanguageTag().IsMatch(language) || kind is null || !CaptionKinds.Contains(kind))
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid,
+                    $"media \"{mediaSource}\" has a caption track that is not {{ source, language, kind? }} with a BCP 47 tag and an HTML track kind; it is dropped", file);
+                continue;
+            }
+
+            if (!sources.TryGetValue(source, out var declared))
+            {
+                diagnostics.Add(DiagnosticCodes.C006EvidenceSourceUnknown,
+                    $"media \"{mediaSource}\" has a caption track \"{source}\", which sources[] does not declare; it is dropped", file);
+                continue;
+            }
+
+            if (seen.Contains(source))
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid, $"media \"{mediaSource}\" lists caption track \"{source}\" twice; the later one is dropped", file);
+                continue;
+            }
+
+            var path = LocalEvidencePath(file, JsonValues.StringOf(declared["resource"]), files);
+            if (path is null || EvidenceText.KindOf(path) != SourceKind.WebVtt)
+            {
+                diagnostics.Add(DiagnosticCodes.C005FieldInvalid,
+                    $"media \"{mediaSource}\" caption track \"{source}\" is not a WebVTT file under sources/ or media/; it is dropped", file);
+                continue;
+            }
+
+            seen.Add(source);
+            tracks.Add(new CaptionTrack(source, language, kind));
+        }
+
+        return tracks.Count > 0 ? tracks : null;
     }
 
     /// <summary>
@@ -782,11 +908,10 @@ internal static partial class ContentReader
         return checks;
     }
 
-    private static void CheckWindow(string file, JsonObject frontmatter, DiagnosticBag diagnostics)
+    private static void CheckWindow(string file, JsonNode? validFrom, JsonNode? validUntil, DiagnosticBag diagnostics)
     {
-        var moca = frontmatter["moca"] as JsonObject;
-        var from = Dates.Parse(moca?["valid_from"]);
-        var until = Dates.Parse(moca?["valid_until"]);
+        var from = Dates.Parse(validFrom);
+        var until = Dates.Parse(validUntil);
         if (from is not null && until is not null && until <= from)
         {
             diagnostics.Add(DiagnosticCodes.C010ValidityWindowInvalid, "moca.valid_until must be later than moca.valid_from", file);

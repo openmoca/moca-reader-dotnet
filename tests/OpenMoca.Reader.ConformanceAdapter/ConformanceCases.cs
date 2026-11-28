@@ -132,6 +132,7 @@ public static class ConformanceCases
             ["publisher"] = result.Publisher is { } publisher ? JsonSerializer.SerializeToNode(publisher, CitationJson.Options) : null,
             ["url"] = result.Url,
             ["contributors"] = result.Contributors is { } contributors ? JsonSerializer.SerializeToNode(contributors, CitationJson.Options) : null,
+            ["localeCoverage"] = result.LocaleCoverage is { } coverage ? JsonSerializer.SerializeToNode(coverage, CitationJson.Options) : null,
             ["issuedCopy"] = result.IssuedCopy is { } issued ? new JsonObject { ["originalDigest"] = issued.OriginalDigest, ["issuers"] = StructureJson.Strings(issued.Issuers), ["changedFiles"] = StructureJson.Strings(issued.ChangedFiles) } : null,
             ["envelope"] = result.Envelope is { } envelope ? EnvelopeJson(envelope) : null,
             ["evidenceMatched"] = evidenceMatched,
@@ -177,6 +178,9 @@ public static class ConformanceCases
             "related" => StructureJson.Items(s.Related(iri)),
             "sequence" => s.Sequence(iri) is { } seq ? StructureJson.Items(seq) : null,
             "nodes" => StructureJson.Strings(s.Nodes(iri, Str(args["include"]) ?? "none").Select(r => r.Node.Ref)),
+            // Package spec §7.4, contract §10: a slot's editions, and the one a locale chooses.
+            "editions" => new JsonArray([.. s.Editions(iri).Select(e => (JsonNode)EditionJson(e))]),
+            "chooseEdition" => s.ChooseEdition(iri, LocaleOf(args["locale"])) is { } chosen ? JsonValue.Create(chosen) : null,
             var op => throw new InvalidOperationException($"unknown structure op {op}"),
         };
 
@@ -210,6 +214,32 @@ public static class ConformanceCases
             ["codes"] = StructureJson.Strings(library.Diagnostics.Select(d => d.Code)),
             ["result"] = JsonSerializer.SerializeToNode(entries, CitationJson.Options),
         };
+    }
+
+    /// <summary>Package spec §5.4: a locale is a tag or a priority list.</summary>
+    private static LocaleRequest? LocaleOf(JsonNode? locale) => locale switch
+    {
+        JsonArray list => LocaleRequest.From(list.Select(Str)),
+        JsonValue one => Str(one),
+        _ => null,
+    };
+
+    /// <summary>Contract §10: an edition as <c>{ id, version, language?, title?, default }</c>.</summary>
+    private static JsonObject EditionJson(EditionItem e)
+    {
+        var item = new JsonObject { ["id"] = e.Id, ["version"] = e.Version };
+        if (e.Language is not null)
+        {
+            item["language"] = e.Language;
+        }
+
+        if (e.Title is not null)
+        {
+            item["title"] = e.Title;
+        }
+
+        item["default"] = e.Default;
+        return item;
     }
 
     private static TermsLimits? TermsLimitsOf(JsonObject o) => o["termsLimits"] is JsonObject limits ? TermsLimits.FromJson(limits) : null;
@@ -256,7 +286,10 @@ public static class ConformanceCases
         {
             Limit = (int)(JsonValues.IntegerOf(search["limit"]) ?? 50),
             IncludeAll = search["includeAll"] is JsonValue ia && ia.TryGetValue<bool>(out var iab) && iab,
-            Locale = Str(search["locale"]),
+            // Package spec §5.4: a tag or a priority list.
+            Locale = LocaleOf(search["locale"]),
+            LocaleMode = Str(search["localeMode"]) switch { "first" => LocaleMode.First, "only" => LocaleMode.Only, _ => LocaleMode.Choose },
+            Editions = Str(search["editions"]) == "all" ? EditionsMode.All : EditionsMode.Choose,
             Concepts = search["concepts"] is JsonArray concepts ? concepts.Select(Str).OfType<string>().ToList() : null,
             Scope = Str(search["scope"]),
             UpTo = Str(search["upTo"]),

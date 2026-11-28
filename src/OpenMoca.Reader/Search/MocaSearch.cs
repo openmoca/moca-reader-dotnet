@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
 using OpenMoca.Reader.Citations;
+using OpenMoca.Reader.Content;
 using OpenMoca.Reader.Diagnostics;
 using OpenMoca.Reader.Structure;
 
@@ -12,8 +13,8 @@ namespace OpenMoca.Reader.Search;
 /// <summary>
 /// The Reader's search (Reader contract §9): ingress hook, backend, resolve hits into citation records,
 /// egress hook, then the gate. Backends and hooks only propose candidates; the gate (digest allowlist,
-/// default retrieval policy, audience, locale, concepts and scope) always runs last, so nothing either
-/// of them does can return content the policy excludes.
+/// default retrieval policy, audience, locale and edition groups, concepts and scope, upTo, then terms) always runs
+/// last, so nothing either of them does can return content the policy excludes.
 /// </summary>
 public sealed class MocaSearch
 {
@@ -148,7 +149,12 @@ public sealed class MocaSearch
         var view = _source is not null ? new StoreView(_source) : null;
         // The caller's concepts and scope bind the gate. Ingress may narrow what the backend searches,
         // but can never widen what the caller asked for.
-        var caller = options with { Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null };
+        // Package spec §5.4: a locale is a priority list; an empty one is no locale.
+        var caller = options with
+        {
+            Concepts = options.Concepts is { Count: > 0 } c ? [.. c] : null,
+            Locale = options.Locale is { IsEmpty: false } locales ? locales : null,
+        };
         var findings = new DiagnosticBag();
         // Contract §9: an upTo that no loaded reading order places limits nothing, and never silently.
         if (caller.UpTo is { } upTo)
@@ -179,7 +185,9 @@ public sealed class MocaSearch
             };
         }
 
-        var (fetch, filters) = Plan(request, caller, now, index, loaded, composition);
+        // Contract §9.2 step 5.4: which representations steps 5.1 to 5.3 keep, worked out once per call.
+        var eligible = new Eligibility(now, index, caller.IncludeAll, _audiences, _allowUnlabelled);
+        var (fetch, filters) = Plan(request, caller, now, index, loaded, composition, eligible);
         // Contract §15.3–15.4: each node's resolved terms, and which packages are closed or hidden for the request.
         var resolver = caller.Terms is { } termsRequest ? ResolverFor(termsRequest, composition, view) : null;
         // Contract §9.2, "Filters come before the limit": ask again, for more each time, until limit records pass the
@@ -216,8 +224,12 @@ public sealed class MocaSearch
 
             // Counted afresh each round: the last round's count is the one reported.
             var excluded = caller.Terms is not null ? new TermsCount() : null;
-            var passed = Gate(candidates, caller, loaded, view, composition, resolver, excluded);
-            var done = passed.Count >= caller.Limit || hits.Count < size;
+            var passed = Gate(candidates, caller, loaded, view, composition, resolver, excluded, eligible);
+            // Contract §9.2, "Language first": with localeMode first, limit records of the first group, or no more hits.
+            var enough = caller.Locale is not null && caller.LocaleMode == LocaleMode.First
+                ? passed.Count(r => LocaleGroup(r, caller.Locale) == 0) >= caller.Limit
+                : passed.Count >= caller.Limit;
+            var done = enough || hits.Count < size;
             var truncated = !done && _maxCandidates is { } max && size >= max;
             if (done || truncated)
             {
@@ -354,7 +366,7 @@ public sealed class MocaSearch
     }
 
     private (int Fetch, SearchFilters Filters) Plan(SearchOptions request, SearchOptions caller, DateTimeOffset now, RelationIndex index,
-        Dictionary<string, PackageResult> loaded, CompositionIndex composition)
+        Dictionary<string, PackageResult> loaded, CompositionIndex composition, Eligibility eligible)
     {
         // Contract §9.5: for a store search, whether any package in the store binds members, from the cached index.
         var composed = _library is not null ? composition.HasBindings : _source!.Index.HasBindings;
@@ -374,12 +386,16 @@ public sealed class MocaSearch
             }
         }
 
+        // Contract §9.2 step 5.4 and §9.5: the locale chooses among the representations steps 5.1 to 5.3 keep, which a
+        // backend cannot see; so when a node's representations differ there, locale is applied only in the gate.
+        var localeHeld = request.Locale is not null && _library is not null && _library.Packages.Any(p =>
+            p.Result.Nodes.Any(node => node.Representations.Count > 1 && node.Representations.Select(eligible.In(p.Result, node)).Distinct().Count() > 1));
         var concepts = ConceptsFor(request);
         // The store's allowlist is the host's own list, handed on as it is, never copied.
         var digests = _library is not null ? _library.Packages.Select(p => p.Result.Digest!).ToList() : _source!.Digests;
         // Contract §9.5: a record bound by composition carries none of those concepts itself, so the filter is left to
         // the gate when any loaded package binds members.
-        var filters = new SearchFilters(digests, exclude, _audiences, request.Locale, composed ? null : concepts, _allowUnlabelled)
+        var filters = new SearchFilters(digests, exclude, _audiences, localeHeld ? null : request.Locale, composed ? null : concepts, _allowUnlabelled)
         {
             // The search's own candidate check for what has no pushdown filter: upTo, and concepts bound by composition.
             Accept = AcceptFor(caller, concepts, loaded, composition),
@@ -388,7 +404,11 @@ public sealed class MocaSearch
         // an egress hook reorders them and needs candidates to choose from. Either way the search asks again while too
         // few pass (contract §9.2).
         var pushdown = _backend.Features.HasFlag(BackendFeatures.FilterPushdown);
-        var first = pushdown && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
+        // A store search loads its composers' states with its hits, after this plan, so it cannot yet tell whether any
+        // folds editions: with a locale it asks for more, as when one does.
+        var folds = request.Locale is not null && request.Editions != EditionsMode.All && (_library is null || composition.HasSlots);
+        var moded = request.Locale is not null && request.LocaleMode != LocaleMode.Choose;
+        var first = pushdown && !localeHeld && !folds && !moded && _hooks.Egress is null && request.UpTo is null && !(composed && concepts is not null)
             ? request.Limit
             : (int)Math.Min((long)request.Limit * _overfetch, int.MaxValue);
         return (Math.Max(1, _maxCandidates is { } max ? Math.Min(first, max) : first), filters);
@@ -503,6 +523,32 @@ public sealed class MocaSearch
         return true;
     }
 
+    private bool KeepsEdition(CitationRecord record, IReadOnlyList<string> locale, Dictionary<string, PackageResult> loaded, StoreView? view,
+        CompositionIndex composition)
+    {
+        foreach (var composer in composition.ComposersOf(record.Package.Digest))
+        {
+            if (!composer.HasSlots)
+            {
+                continue;
+            }
+
+            // Package spec §7.4, "Authority": only where the composite's signers cover the record's package, as for upTo.
+            // For a store search the composite's state is among those the view loaded for the record's composers.
+            if (!_allowUnsigned && !TrustRoot.ScopeCovers(RelationScopesOf(composer.Digest, loaded, view), record.Package.Id))
+            {
+                continue;
+            }
+
+            if (!composer.KeepsEdition(record, locale))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private IReadOnlyList<string> RelationScopesOf(string digest, Dictionary<string, PackageResult> loaded, StoreView? view) =>
         _library is not null
             ? loaded.GetValueOrDefault(digest)?.RelationScopes ?? []
@@ -563,7 +609,7 @@ public sealed class MocaSearch
     /// best first; the caller keeps the limit.
     /// </summary>
     private List<CitationRecord> Gate(IReadOnlyList<CitationRecord> candidates, SearchOptions caller, Dictionary<string, PackageResult> loaded,
-        StoreView? view, CompositionIndex composition, TermsResolver? resolver, TermsCount? excluded)
+        StoreView? view, CompositionIndex composition, TermsResolver? resolver, TermsCount? excluded, Eligibility eligible)
     {
         var concepts = ConceptsFor(caller);
         var wanted = concepts is null ? null : concepts.ToHashSet(StringComparer.Ordinal);
@@ -587,7 +633,19 @@ public sealed class MocaSearch
                 continue;
             }
 
-            if (caller.Locale is not null && !LocaleOk(record, caller.Locale, loaded))
+            if (caller.Locale is not null && !LocaleOk(record, caller.Locale, loaded, eligible))
+            {
+                continue;
+            }
+
+            // Contract §9.2 step 5.4, package spec §7.4: one edition per slot, where the composite speaks for the record.
+            if (caller.Locale is not null && caller.Editions != EditionsMode.All && composition.HasSlots && !KeepsEdition(record, caller.Locale, loaded, view, composition))
+            {
+                continue;
+            }
+
+            // Contract §9: localeMode only keeps records whose language matches an entry of the locale list.
+            if (caller.Locale is not null && caller.LocaleMode == LocaleMode.Only && LocaleGroup(record, caller.Locale) == caller.Locale.Count)
             {
                 continue;
             }
@@ -610,7 +668,8 @@ public sealed class MocaSearch
                 continue;
             }
 
-            // Contract §9.2 step 5.3 and §15.4: with a terms request, the terms gate. Without one, terms remove nothing,
+            // Contract §9.2 step 5.7 and §15.4: with a terms request, the terms gate, after every other filter but one per
+            // span, so U004 counts only records the search would otherwise return. Without one, terms remove nothing,
             // and a record never carries terms a backend or hook gave it.
             var kept = record with { Terms = null };
             if (caller.Terms is { } request)
@@ -633,7 +692,27 @@ public sealed class MocaSearch
             records = records.OrderByDescending(r => r.Score ?? 0).ToList();
         }
 
+        // Contract §9: localeMode first orders by the first locale entry each record matches, stably within a group.
+        if (caller.Locale is { } locales && caller.LocaleMode == LocaleMode.First)
+        {
+            records = records.OrderBy(r => LocaleGroup(r, locales)).ToList();
+        }
+
         return records;
+    }
+
+    /// <summary>Contract §9: the index of the first locale entry a record's language matches, or the list's length for none.</summary>
+    private static int LocaleGroup(CitationRecord record, IReadOnlyList<string> locales)
+    {
+        for (var i = 0; i < locales.Count; i++)
+        {
+            if (LocaleLookup.Matches(record.Node.Locale, [locales[i]]))
+            {
+                return i;
+            }
+        }
+
+        return locales.Count;
     }
 
     /// <summary>
@@ -657,19 +736,47 @@ public sealed class MocaSearch
         return resolver.WithoutHidden(record with { Terms = TermsRules.RecordTerms(authority, ai, rating, TermsRules.ResolveExport(terms, composites)) });
     }
 
-    private static bool LocaleOk(CitationRecord record, string locale, Dictionary<string, PackageResult> loaded)
+    private static bool LocaleOk(CitationRecord record, IReadOnlyList<string> locale, Dictionary<string, PackageResult> loaded, Eligibility eligible)
     {
         loaded.TryGetValue(record.Package.Digest, out var result);
         var node = result?.Nodes.FirstOrDefault(n => n.Path == record.Node.Path);
+        // A store record has no node to choose within: it passes when its own language matches the request.
         if (node is null)
         {
-            var want = locale.ToLowerInvariant();
-            var have = (record.Node.Locale ?? "").ToLowerInvariant();
-            return have == want || want.StartsWith(have + "-", StringComparison.Ordinal) || have.StartsWith(want + "-", StringComparison.Ordinal);
+            return LocaleLookup.Matches(record.Node.Locale, locale);
         }
 
-        var rep = Citations.Citations.PickRepresentation(node, locale);
-        return (rep.Locale ?? JsonValues.StringOf(result!.Manifest?["language"])) == record.Node.Locale;
+        // Contract §9.2 step 5.4: chosen among the representations that pass steps 5.1 to 5.3, so a retired translation
+        // falls back as a missing one does.
+        var rep = Citations.Citations.PickRepresentation(node, locale, eligible.In(result!, node));
+        return rep is not null && LocaleLookup.RepresentationTag(node, rep) == record.Node.Locale;
+    }
+
+    /// <summary>
+    /// Contract §9.2 steps 5.2 and 5.3, per representation: whether the default retrieval policy (unless the host opted
+    /// in) and the audience set keep it. Cached for one search call. The terms gate is per node, so it never tells two
+    /// representations apart.
+    /// </summary>
+    private sealed class Eligibility(DateTimeOffset now, RelationIndex index, bool includeAll, IReadOnlyList<string>? audiences, bool allowUnlabelled)
+    {
+        private readonly Dictionary<(PackageResult, ContentNode), Dictionary<Representation, bool>> _kept = [];
+
+        public Func<Representation, bool> In(PackageResult result, ContentNode node)
+        {
+            if (!_kept.TryGetValue((result, node), out var byRep))
+            {
+                byRep = new Dictionary<Representation, bool>(ReferenceEqualityComparer.Instance);
+                foreach (var rep in node.Representations)
+                {
+                    var record = Citations.Citations.For(result, node, rep, now, index);
+                    byRep[rep] = (includeAll || Citations.Citations.PassesDefaultPolicy(record)) && Audience.Allowed(record, audiences, allowUnlabelled);
+                }
+
+                _kept[(result, node)] = byRep;
+            }
+
+            return rep => byRep.GetValueOrDefault(rep);
+        }
     }
 
     /// <summary>A stored record with its clock-dependent fields recomputed for now.</summary>
