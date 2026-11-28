@@ -18,6 +18,10 @@ For moca-spec 0.8.0: content in more than one language.
 - **A translation inherits** its default file's `moca.concepts`, `status`, `moca.valid_from` and `moca.valid_until`
   when it writes none, each key on its own, as it already did `moca.audience` (package spec §5.4). `C010` is checked
   on the window each representation ends up with. Unit tests in `InheritanceTests`.
+- **A retired translation falls back** (contract §9.2 step 5.4): a search chooses a node's representation among those
+  the default retrieval policy and the audience set keep, so a deprecated or ended translation is treated as a missing
+  one. When a loaded node's representations differ in those steps, `locale` is applied in the gate, not pushed down
+  (§9.5). Unit test in `SearchLanguageTests`.
 
 ## Unreleased: 0.8.0
 
