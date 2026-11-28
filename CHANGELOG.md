@@ -15,6 +15,9 @@ For moca-spec 0.8.0: content in more than one language.
 - **`locale` is a priority list** (breaking): `SearchOptions.Locale`, `SearchFilters.Locale`, `Library.Citations`,
   `Library.Get` and `StructureIndex.Nodes` take an `IReadOnlyList<string>` (`["fr-CA", "en"]`; one tag is a list of
   one) instead of a string. The pushdown filter carries the list.
+- **A translation inherits** its default file's `moca.concepts`, `status`, `moca.valid_from` and `moca.valid_until`
+  when it writes none, each key on its own, as it already did `moca.audience` (package spec §5.4). `C010` is checked
+  on the window each representation ends up with. Unit tests in `InheritanceTests`.
 
 ## Unreleased: 0.8.0
 

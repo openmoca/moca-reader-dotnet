@@ -108,6 +108,19 @@ public sealed record PackageStructure(bool Present, bool Ok, IReadOnlyList<Struc
             }
         }
 
+        // Package spec §5.4: a translation that writes no moca.concepts is bound as its default file is.
+        foreach (var node in nodes)
+        {
+            foreach (var rep in node.Representations)
+            {
+                var from = Inheritance.SourceOf(node, rep, "concepts");
+                if (!ReferenceEquals(from, rep) && from.Concepts is { } concepts)
+                {
+                    rep.Concepts = [.. concepts];
+                }
+            }
+        }
+
         var ok = !diagnostics.Since(before).Any(d => d.Code.StartsWith('O'));
         return new PackageStructure(true, ok, parsed.Facts, graph);
     }

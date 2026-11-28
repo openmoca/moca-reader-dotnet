@@ -277,7 +277,6 @@ internal static partial class ContentReader
                 : null;
 
             CheckEvidenceSources(file, frontmatter, diagnostics);
-            CheckWindow(file, frontmatter, diagnostics);
             CheckPaths(file, frontmatter, split.Body, files, diagnostics);
             var media = MediaDescriptions(file, frontmatter, files, diagnostics);
             var evidenceChecks = VerifyEvidence(file, frontmatter, files, bytes, diagnostics, limits, sourceText, budget, media);
@@ -313,6 +312,12 @@ internal static partial class ContentReader
             {
                 diagnostics.Add(DiagnosticCodes.C009LocaleOrphan,
                     $"locale variant has no default-language file {ContentDirectory}/{node.Path}", node.Representations[0].File);
+            }
+
+            // Package spec §5.4: C010 applies to the window each representation ends up with, on its own file.
+            foreach (var rep in node.Representations)
+            {
+                CheckWindow(rep.File, Inheritance.Inherited(node, rep, "valid_from"), Inheritance.Inherited(node, rep, "valid_until"), diagnostics);
             }
 
             nodes.Add(node);
@@ -783,11 +788,10 @@ internal static partial class ContentReader
         return checks;
     }
 
-    private static void CheckWindow(string file, JsonObject frontmatter, DiagnosticBag diagnostics)
+    private static void CheckWindow(string file, JsonNode? validFrom, JsonNode? validUntil, DiagnosticBag diagnostics)
     {
-        var moca = frontmatter["moca"] as JsonObject;
-        var from = Dates.Parse(moca?["valid_from"]);
-        var until = Dates.Parse(moca?["valid_until"]);
+        var from = Dates.Parse(validFrom);
+        var until = Dates.Parse(validUntil);
         if (from is not null && until is not null && until <= from)
         {
             diagnostics.Add(DiagnosticCodes.C010ValidityWindowInvalid, "moca.valid_until must be later than moca.valid_from", file);

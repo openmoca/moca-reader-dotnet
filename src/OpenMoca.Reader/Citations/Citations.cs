@@ -69,8 +69,11 @@ public static class Citations
         var key = $"{result.Id}@{result.Version}";
         // Package spec §4.4: the node's window is the intersection of the package's and its own. A bound that does
         // not parse, or a window whose end is not after its start, is ignored: it never takes a node out of force.
+        // Package spec §5.4: a translation takes the bounds and status it does not write from its default file.
         var (validFrom, validUntil, from, until) = Dates.EffectiveWindow(
-            Str(manifest["validFrom"]), Str(manifest["validUntil"]), Str(moca["valid_from"]), Str(moca["valid_until"]));
+            Str(manifest["validFrom"]), Str(manifest["validUntil"]),
+            Str(Inheritance.Inherited(node, rep, "valid_from")), Str(Inheritance.Inherited(node, rep, "valid_until")));
+        var statusValue = Str(Inheritance.Inherited(node, rep, "status"));
         var supersededBy = index?.Superseded.GetValueOrDefault(key) ?? [];
         var contestedBy = (moca["contested_by"] as JsonArray ?? []).Select(Str).OfType<string>()
             .Concat(index?.Contested.GetValueOrDefault(key) ?? [])
@@ -153,7 +156,7 @@ public static class Citations
             Text = text,
             Trust = new CitationTrust
             {
-                Status = Str(fm["status"]) is { } status && Statuses.Contains(status) ? status : "stable",
+                Status = statusValue is { } status && Statuses.Contains(status) ? status : "stable",
                 // An entry with no actor (`by`) is dropped rather than reported as "undefined".
                 Generated = fm["generated"] is JsonObject generated && HasActor(generated)
                     ? new DeclaredBy(generated["by"]!.ToString(), generated["at"]?.ToString())
