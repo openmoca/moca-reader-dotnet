@@ -33,7 +33,8 @@ For moca-spec 0.8.0: content in more than one language.
   `PackageStructure.Slots`). An edition is bound to its slot as a part is (`Scope`, `Nodes()`, `UpTo`). With a
   locale, the gate keeps one edition per slot, and its members, where the composite's signers cover the record's
   package (`SearchOptions.Editions = EditionsMode.All` keeps every one). Package states carry each member's
-  `language` and the slots (`CompositionMember.Language`, `CompositionState.Slots`). Structure operations
+  `language` and the slots (`CompositionMember.Language`, `CompositionState.Slots`); an edition is any member the
+  composite lists itself (`CompositionMember.Direct`), even when another member also composes it. Structure operations
   `Editions(slot)` (`EditionItem`) and `ChooseEdition(slot, locale)`; `Editions.Choose`. Unit tests in
   `EditionTests`.
 - **`SearchOptions.LocaleMode`** (contract §9): `Choose` (the default), `Only` (records in another language drop out,

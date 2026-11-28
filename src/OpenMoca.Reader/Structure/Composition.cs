@@ -17,6 +17,14 @@ public sealed record CompositionMember
     /// <summary>The member's package id.</summary>
     [JsonPropertyName("id")] public required string Id { get; init; }
 
+    /// <summary>
+    /// Whether the composing package lists the member in its own <c>members</c> (another member may also compose it).
+    /// Only such a member can be an edition (package spec §7.4).
+    /// </summary>
+    [JsonPropertyName("direct")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Direct { get; init; }
+
     /// <summary>The member's manifest <c>language</c>, when it has one: its tag when it is an edition (package spec §7.4).</summary>
     [JsonPropertyName("language")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -75,6 +83,7 @@ public static class Composition
         bool Declared(string iri) => graph is not null && graph.Concepts.TryGetValue(iri, out var c) && c.Declared is not null;
 
         var entries = new Dictionary<string, (string Id, string? Language, bool Bound, List<string> Nodes, SortedSet<string> Parents)>(StringComparer.Ordinal);
+        var listed = new HashSet<string>(StringComparer.Ordinal);
         var starts = new List<string>();
         var queue = new Queue<(IEnumerable<PackageMember> Members, string? Parent)>();
         queue.Enqueue((result.Members, null));
@@ -112,6 +121,11 @@ public static class Composition
                 if (parent is not null)
                 {
                     entry.Parents.Add(parent);
+                }
+                else
+                {
+                    // Package spec §7.4: the composing package lists this member itself.
+                    listed.Add(child.Digest);
                 }
 
                 if (visited.Add(child.Digest))
@@ -153,6 +167,7 @@ public static class Composition
             {
                 Digest = kv.Key,
                 Id = kv.Value.Id,
+                Direct = listed.Contains(kv.Key),
                 Language = kv.Value.Language,
                 Bound = kv.Value.Bound,
                 Nodes = kv.Value.Nodes,
@@ -216,7 +231,7 @@ public sealed class Composer
         var direct = new Dictionary<string, CompositionMember>(StringComparer.Ordinal);
         foreach (var (m, _) in _members.Values)
         {
-            if ((m.Parents ?? []).Count == 0)
+            if (m.Direct)
             {
                 direct.TryAdd(m.Id, m);
             }

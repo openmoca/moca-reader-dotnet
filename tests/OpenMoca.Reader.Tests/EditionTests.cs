@@ -15,8 +15,8 @@ public sealed class EditionTests
     {
         Members =
         [
-            Member("d-en", En, "en"),
-            Member("d-fr", Fr, "fr"),
+            Member("d-en", En, "en", direct: true),
+            Member("d-fr", Fr, "fr", direct: true),
             Member("d-en-1", $"{En}/1", null, "d-en"),
             Member("d-fr-1", $"{Fr}/1", null, "d-fr"),
             Member("d-handout", "https://example.com/handout", null, "d-en", "d-fr"),
@@ -25,26 +25,29 @@ public sealed class EditionTests
         Slots = [new EditionSlot { Iri = "https://example.com/course#c", Editions = [En, Fr], Default = En }],
     })]);
 
-    private static CompositionMember Member(string digest, string id, string? language, params string[] parents) => new()
+    private static CompositionMember Member(string digest, string id, string? language, params string[] parents) =>
+        Member(digest, id, language, false, parents);
+
+    private static CompositionMember Member(string digest, string id, string? language, bool direct, params string[] parents) => new()
     {
         Digest = digest,
         Id = id,
+        Direct = direct,
         Language = language,
         Bound = parents.Length == 0,
         Nodes = [],
         Parents = parents,
     };
 
-    private static bool Keeps(string digest, string locale)
+    private static CitationRecord RecordOf(string digest) => new()
     {
-        var record = new CitationRecord
-        {
-            Package = new CitationPackage("https://example.com/x", "1.0.0", digest, false),
-            Node = new CitationNode { Id = "https://example.com/x#a.md", Ref = "https://example.com/x@1.0.0#a.md", Path = "a.md", Type = "Note" },
-            Trust = new CitationTrust { Status = "stable" },
-        };
-        return Index.ComposersOf(digest).All(c => c.KeepsEdition(record, [locale]));
-    }
+        Package = new CitationPackage("https://example.com/x", "1.0.0", digest, false),
+        Node = new CitationNode { Id = "https://example.com/x#a.md", Ref = "https://example.com/x@1.0.0#a.md", Path = "a.md", Type = "Note" },
+        Trust = new CitationTrust { Status = "stable" },
+    };
+
+    private static bool Keeps(string digest, string locale) =>
+        Index.ComposersOf(digest).All(c => c.KeepsEdition(RecordOf(digest), [locale]));
 
     [Fact]
     public void TheChosenEditionAndItsMembers_AreKept_TheOtherEditionAndItsMembersAreNot()
@@ -78,5 +81,21 @@ public sealed class EditionTests
         available.Remove("https://example.com/c");
         Assert.Equal("https://example.com/a", Editions.Choose(slot, available, ["de"]));
         Assert.Null(Editions.Choose(slot, new Dictionary<string, string?>(), ["de"]));
+    }
+
+    [Fact]
+    public void AnEditionTheCompositeListsItself_CanBeChosen_ThoughAnotherMemberAlsoComposesIt()
+    {
+        var nested = new CompositionIndex([("d-course", new CompositionState
+        {
+            Members = [Member("d-en", En, "en", direct: true), Member("d-fr", Fr, "fr", true, "d-en")],
+            Up = new Dictionary<string, IReadOnlyList<string>>(),
+            Slots = [new EditionSlot { Iri = "https://example.com/course#c", Editions = [En, Fr], Default = En }],
+        })]);
+
+        var composer = Assert.Single(nested.ComposersOf("d-fr"));
+
+        Assert.True(composer.KeepsEdition(RecordOf("d-fr"), ["fr"]));
+        Assert.False(composer.KeepsEdition(RecordOf("d-en"), ["fr"]));
     }
 }
